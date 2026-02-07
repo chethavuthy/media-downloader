@@ -16,7 +16,7 @@ async function downloadFile(url: string, outputPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const protocol = url.startsWith('https') ? https : http;
     const file = createWriteStream(outputPath);
-    
+
     protocol.get(url, (response) => {
       if (response.statusCode === 302 || response.statusCode === 301) {
         // Follow redirect
@@ -28,24 +28,24 @@ async function downloadFile(url: string, outputPath: string): Promise<void> {
         }
         return;
       }
-      
+
       if (response.statusCode !== 200) {
         reject(new Error(`Failed to download: ${response.statusCode}`));
         return;
       }
-      
+
       response.pipe(file);
       file.on('finish', () => {
         file.close();
         resolve();
       });
     }).on('error', (err) => {
-      fs.unlink(outputPath).catch(() => {});
+      fs.unlink(outputPath).catch(() => { });
       reject(err);
     });
-    
+
     file.on('error', (err) => {
-      fs.unlink(outputPath).catch(() => {});
+      fs.unlink(outputPath).catch(() => { });
       reject(err);
     });
   });
@@ -60,14 +60,14 @@ async function getVideoUrlFromAPI(fbUrl: string): Promise<string | null> {
     const { stdout } = await execAsync(
       `"${config.ytDlpPath}" "${fbUrl}" --get-url --no-warnings 2>/dev/null || echo ""`
     );
-    
+
     if (stdout.trim()) {
       return stdout.trim().split('\n')[0];
     }
   } catch (error) {
     logger.warn('Failed to extract video URL');
   }
-  
+
   return null;
 }
 
@@ -76,28 +76,32 @@ async function getVideoUrlFromAPI(fbUrl: string): Promise<string | null> {
  */
 export async function downloadFacebookVideo(url: string, outputPath: string): Promise<string> {
   logger.info(`Attempting Facebook download: ${url}`);
-  
-  // Strategy 1: Try with cookies from browser
+
+  // Strategy 1: Try with cookies
   try {
-    logger.info('Strategy 1: Trying with browser cookies');
+    const cookiesArg = config.cookiesPath
+      ? `--cookies "${config.cookiesPath}"`
+      : '--cookies-from-browser chrome';
+
+    logger.info(`Strategy 1: Trying with cookies (${cookiesArg})`);
     await execAsync(
-      `"${config.ytDlpPath}" "${url}" -o "${outputPath}" -f "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best" --merge-output-format mp4 --cookies-from-browser chrome --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" --no-warnings 2>&1`,
+      `"${config.ytDlpPath}" "${url}" -o "${outputPath}" -f "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best" --merge-output-format mp4 ${cookiesArg} --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" --no-warnings 2>&1`,
       { timeout: 60000 }
     );
-    
+
     // Check if file was created
     const possibleFiles = [
       outputPath.replace('%(ext)s', 'mp4'),
       outputPath.replace('%(ext)s', 'mkv'),
       outputPath.replace('%(ext)s', 'webm'),
     ];
-    
+
     for (const file of possibleFiles) {
       try {
         await fs.access(file);
         logger.info('Facebook download successful with cookies');
         return outputPath;
-      } catch {}
+      } catch { }
     }
   } catch (error: any) {
     logger.warn(`Strategy 1 failed: ${error.message}`);
@@ -110,19 +114,19 @@ export async function downloadFacebookVideo(url: string, outputPath: string): Pr
       `"${config.ytDlpPath}" "${url}" -o "${outputPath}" -f "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best" --merge-output-format mp4 --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" --no-check-certificates --no-warnings 2>&1`,
       { timeout: 60000 }
     );
-    
+
     const possibleFiles = [
       outputPath.replace('%(ext)s', 'mp4'),
       outputPath.replace('%(ext)s', 'mkv'),
       outputPath.replace('%(ext)s', 'webm'),
     ];
-    
+
     for (const file of possibleFiles) {
       try {
         await fs.access(file);
         logger.info('Facebook download successful with direct method');
         return outputPath;
-      } catch {}
+      } catch { }
     }
   } catch (error: any) {
     logger.warn(`Strategy 2 failed: ${error.message}`);
@@ -132,7 +136,7 @@ export async function downloadFacebookVideo(url: string, outputPath: string): Pr
   try {
     logger.info('Strategy 3: Trying to extract direct video URL');
     const videoUrl = await getVideoUrlFromAPI(url);
-    
+
     if (videoUrl) {
       const finalPath = outputPath.replace('%(ext)s', 'mp4');
       await downloadFile(videoUrl, finalPath);

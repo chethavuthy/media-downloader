@@ -137,12 +137,14 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
 
       const galleryDlPath = config.galleryDlPath;
 
+      const cookiesArg = config.cookiesPath
+        ? `--cookies "${config.cookiesPath}"`
+        : '--cookies-from-browser chrome';
+
       // Step 1: High-Speed Probe
-      // We try to get the first image and its metadata immediately.
-      // This identifies the user and the upload date needed for reconstruction.
       logger.info('Performing high-speed probe for Facebook gallery...');
       await execAsync(
-        `${galleryDlPath} "${targetUrl}" --dest "${outputDir}" --cookies-from-browser chrome --no-mtime --write-metadata --range 1`,
+        `${galleryDlPath} "${targetUrl}" --dest "${outputDir}" ${cookiesArg} --no-mtime --write-metadata --range 1`,
         { timeout: 60000 }
       ).catch(e => logger.warn(`Probe failed, but check files: ${e.message}`));
 
@@ -186,7 +188,7 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
               // range 1-20 is enough for most recent galleries and much faster
               const timelineUrl = `https://www.facebook.com/${userIdentifier}/photos/`;
               await execAsync(
-                `${galleryDlPath} "${timelineUrl}" --dest "${scanDir}" --range 1-20 --cookies-from-browser chrome --no-mtime --write-metadata`,
+                `${galleryDlPath} "${timelineUrl}" --dest "${scanDir}" --range 1-20 ${cookiesArg} --no-mtime --write-metadata`,
                 { timeout: 120000 }
               );
 

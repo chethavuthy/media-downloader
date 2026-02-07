@@ -7,6 +7,7 @@ interface Config {
   ytDlpPath: string;
   instaloaderPath: string;
   galleryDlPath: string;
+  cookiesPath: string;
   maxDownloadsPerUser: number;
   rateLimitWindowMinutes: number;
   maxFileSizeMB: number;
@@ -34,6 +35,7 @@ export const config: Config = {
   ytDlpPath: getEnvVar('YT_DLP_PATH', 'yt-dlp'),
   instaloaderPath: getEnvVar('INSTALOADER_PATH', 'instaloader'),
   galleryDlPath: getEnvVar('GALLERY_DL_PATH', 'gallery-dl'),
+  cookiesPath: getEnvVar('COOKIES_PATH', ''),
   maxDownloadsPerUser: getEnvNumber('MAX_DOWNLOADS_PER_USER', 5),
   rateLimitWindowMinutes: getEnvNumber('RATE_LIMIT_WINDOW_MINUTES', 10),
   maxFileSizeMB: getEnvNumber('MAX_FILE_SIZE_MB', 50),

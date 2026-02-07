@@ -58,15 +58,12 @@ export async function downloadVideo(url: string, outputPath: string): Promise<st
       return await downloadFacebookVideo(url, outputPath);
     }
 
-    await ytDlp(url, {
+    const ytdlFlags: any = {
       output: outputPath,
       format: 'best[ext=mp4]/best',
       noWarnings: true,
       noCheckCertificates: true,
       preferFreeFormats: true,
-      // Use platform-specific user agents
-      // Douyin works best with Googlebot
-      // TikTok/Instagram work best with Desktop Safari/Chrome
       userAgent: isDouyin
         ? 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
         : (isTikTok
@@ -74,7 +71,16 @@ export async function downloadVideo(url: string, outputPath: string): Promise<st
           : 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'),
       maxFilesize: `${config.maxFileSizeMB}M`,
       socketTimeout: config.downloadTimeoutSeconds,
-    });
+    };
+
+    // Add cookies if available
+    if (config.cookiesPath) {
+      ytdlFlags.cookies = config.cookiesPath;
+    } else {
+      ytdlFlags.cookiesFromBrowser = 'chrome';
+    }
+
+    await ytDlp(url, ytdlFlags);
 
     logger.info(`Download completed: ${url}`);
 
