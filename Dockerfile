@@ -1,48 +1,50 @@
-# Use Node.js as base
-FROM node:20-slim
+# Use official Node.js image
+FROM node:20
 
-# Install system dependencies (ffmpeg and python3 for yt-dlp)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     python3 \
-    python3-pip \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install yt-dlp globally
+# Install yt-dlp binary
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
     chmod a+rx /usr/local/bin/yt-dlp
 
-# Set environment variables
+# Set environment variables for the build
 ENV YT_DLP_PATH=/usr/local/bin/yt-dlp
 ENV PORT=7860
 
 # Create app directory
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Set permissions for the existing 'node' user (UID 1000)
+# Hugging Face requires UID 1000
+RUN chown -R node:node /app
 
-# Install dependencies
+# Switch to non-root user
+USER node
+
+# Copy package files first to leverage Docker cache
+COPY --chown=node:node package*.json ./
+
+# Install ALL dependencies (including dev deps needed for build)
 RUN npm install
 
-# Copy source code
-COPY . .
+# Copy the rest of the source code
+COPY --chown=node:node . .
 
 # Build the project
 RUN npm run build
 
-# Create downloads directory and set permissions
-RUN mkdir -p /app/downloads && chmod 777 /app/downloads
+# Set permissions for downloads
+RUN mkdir -p /app/downloads
 
-# Hugging Face runs as a non-root user (UID 1000)
-# Make sure the user has access to the app directory
+# Switch to production
 ENV NODE_ENV=production
-RUN useradd -m -u 1000 user
-RUN chown -R user:user /app
-USER user
 
-# Expose port (Hugging Face expects a server on 7860)
+# Expose the mandatory port 7860 for Hugging Face
 EXPOSE 7860
 
 # Run the bot
