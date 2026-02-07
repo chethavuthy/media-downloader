@@ -5,6 +5,8 @@ dotenv.config();
 interface Config {
   telegramBotToken: string;
   ytDlpPath: string;
+  instaloaderPath: string;
+  galleryDlPath: string;
   maxDownloadsPerUser: number;
   rateLimitWindowMinutes: number;
   maxFileSizeMB: number;
@@ -29,7 +31,9 @@ function getEnvNumber(key: string, defaultValue: number): number {
 
 export const config: Config = {
   telegramBotToken: getEnvVar('TELEGRAM_BOT_TOKEN'),
-  ytDlpPath: getEnvVar('YT_DLP_PATH', '/opt/homebrew/bin/yt-dlp'),
+  ytDlpPath: getEnvVar('YT_DLP_PATH', 'yt-dlp'),
+  instaloaderPath: getEnvVar('INSTALOADER_PATH', 'instaloader'),
+  galleryDlPath: getEnvVar('GALLERY_DL_PATH', 'gallery-dl'),
   maxDownloadsPerUser: getEnvNumber('MAX_DOWNLOADS_PER_USER', 5),
   rateLimitWindowMinutes: getEnvNumber('RATE_LIMIT_WINDOW_MINUTES', 10),
   maxFileSizeMB: getEnvNumber('MAX_FILE_SIZE_MB', 50),

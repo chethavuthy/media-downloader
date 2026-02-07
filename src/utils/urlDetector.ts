@@ -52,7 +52,7 @@ export function normalizeUrl(url: string): string {
   try {
     const urlObj = new URL(url);
     // Remove common tracking parameters
-    const paramsToRemove = ['utm_source', 'utm_medium', 'utm_campaign', 'fbclid'];
+    const paramsToRemove = ['utm_source', 'utm_medium', 'utm_campaign', 'fbclid', 'igsh'];
     paramsToRemove.forEach(param => urlObj.searchParams.delete(param));
     return urlObj.toString();
   } catch {

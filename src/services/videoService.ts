@@ -5,7 +5,7 @@ import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 
 // Use Homebrew yt-dlp or system yt-dlp (configurable via env for deployment)
-const ytDlp = youtubedl.create(process.env.YT_DLP_PATH || '/opt/homebrew/bin/yt-dlp');
+const ytDlp = youtubedl.create(config.ytDlpPath);
 
 export class VideoDownloadError extends Error {
   constructor(
@@ -67,39 +67,36 @@ export async function downloadVideo(url: string, outputPath: string): Promise<st
       // Use platform-specific user agents
       // Douyin works best with Googlebot
       // TikTok/Instagram work best with Desktop Safari/Chrome
-      userAgent: isDouyin 
+      userAgent: isDouyin
         ? 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
-        : (isTikTok 
-            ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            : 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'),
+        : (isTikTok
+          ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          : 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'),
       maxFilesize: `${config.maxFileSizeMB}M`,
       socketTimeout: config.downloadTimeoutSeconds,
     });
 
     logger.info(`Download completed: ${url}`);
-    
+
     // Verify file was actually created (yt-dlp can "succeed" without downloading anything)
     const fs = await import('fs/promises');
     const possibleExtensions = ['mp4', 'webm', 'mkv', 'mov', 'avi', 'jpg', 'jpeg', 'png', 'webp'];
     const basePathWithoutExt = outputPath.replace('.%(ext)s', '');
     let fileExists = false;
-    
+
     for (const ext of possibleExtensions) {
       try {
         await fs.access(`${basePathWithoutExt}.${ext}`);
         fileExists = true;
         break;
-      } catch {}
+      } catch { }
     }
-    
+
+
     if (!fileExists) {
-      // Check if it's an Instagram carousel/album
-      if (url.includes('instagram.com')) {
-        throw new VideoDownloadError('Instagram albums/carousels with multiple photos are not supported. Please share individual photos or videos.', 'UNSUPPORTED');
-      }
       throw new VideoDownloadError('Download completed but no file was created', 'UNKNOWN');
     }
-    
+
     return outputPath;
   } catch (error: any) {
     logger.error('Download failed', error);

@@ -20,10 +20,11 @@ export function createTempPath(jobId: string): string {
 
 export async function cleanup(filePath: string): Promise<void> {
   try {
-    await fs.unlink(filePath);
-    logger.info(`Cleaned up file: ${filePath}`);
+    // Use recursive: true to support deleting folders, and force: true to ignore errors if path doesn't exist
+    await fs.rm(filePath, { recursive: true, force: true });
+    logger.info(`Cleaned up: ${filePath}`);
   } catch (error) {
-    logger.warn(`Failed to cleanup file: ${filePath}`);
+    logger.warn(`Failed to cleanup: ${filePath}`);
   }
 }
 
