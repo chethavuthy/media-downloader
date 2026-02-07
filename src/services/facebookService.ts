@@ -1,4 +1,5 @@
 import { logger } from '../utils/logger.js';
+import { config } from '../config/index.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs/promises';
@@ -57,7 +58,7 @@ async function getVideoUrlFromAPI(fbUrl: string): Promise<string | null> {
   try {
     // Using a simple approach - try to get video info from Facebook's own API
     const { stdout } = await execAsync(
-      `/opt/homebrew/bin/yt-dlp "${fbUrl}" --get-url --no-warnings 2>/dev/null || echo ""`
+      `"${config.ytDlpPath}" "${fbUrl}" --get-url --no-warnings 2>/dev/null || echo ""`
     );
     
     if (stdout.trim()) {
@@ -80,7 +81,7 @@ export async function downloadFacebookVideo(url: string, outputPath: string): Pr
   try {
     logger.info('Strategy 1: Trying with browser cookies');
     await execAsync(
-      `/Users/chetha/Library/Python/3.9/bin/yt-dlp "${url}" -o "${outputPath}" --cookies-from-browser chrome --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" --no-warnings 2>&1`,
+      `"${config.ytDlpPath}" "${url}" -o "${outputPath}" --cookies-from-browser chrome --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" --no-warnings 2>&1`,
       { timeout: 60000 }
     );
     
@@ -106,7 +107,7 @@ export async function downloadFacebookVideo(url: string, outputPath: string): Pr
   try {
     logger.info('Strategy 2: Trying direct download');
     await execAsync(
-      `/opt/homebrew/bin/yt-dlp "${url}" -o "${outputPath}" --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" --no-check-certificates --no-warnings 2>&1`,
+      `"${config.ytDlpPath}" "${url}" -o "${outputPath}" --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" --no-check-certificates --no-warnings 2>&1`,
       { timeout: 60000 }
     );
     
@@ -142,6 +143,6 @@ export async function downloadFacebookVideo(url: string, outputPath: string): Pr
     logger.warn(`Strategy 3 failed: ${error.message}`);
   }
 
-  throw new Error('Facebook videos are currently blocked by Facebook. Please try a different video or use the web version.');
+  throw new Error('❌ Facebook videos cannot be downloaded due to Facebook\'s strict anti-bot protection. Try downloading from TikTok, Instagram, YouTube, or Twitter instead!');
 }
 
