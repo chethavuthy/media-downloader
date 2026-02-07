@@ -47,6 +47,17 @@ export async function handleMessage(ctx: Context<Update.MessageUpdate>): Promise
       return;
     }
 
+    // Check rate limit ONLY for actual downloads
+    const { checkRateLimit, recordRequest } = await import('../services/rateLimitService.js');
+    if (!checkRateLimit(userId)) {
+      logger.warn(`Rate limit exceeded for user ${userId}`);
+      await ctx.reply(getText(userId, 'rateLimitExceeded'));
+      return;
+    }
+
+    // Record this download request
+    recordRequest(userId);
+
     // Create download job
     const jobId = uuidv4();
     const job: DownloadJob = {

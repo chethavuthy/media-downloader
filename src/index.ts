@@ -45,16 +45,13 @@ async function main() {
   // Start file cleanup scheduler
   scheduleCleanup();
 
-  // Register middleware
-  bot.use(rateLimitMiddleware);
-
   // Register handlers
   bot.command('start', handleStart);
 
-  // Message handlers with rate limiting
-  bot.on([message('text'), message('caption')], rateLimitMiddleware, async (ctx) => {
+  // Message handlers (rate limiting applied per download, not per message)
+  bot.on([message('text'), message('caption')], async (ctx) => {
     const text = 'text' in ctx.message ? ctx.message.text : ('caption' in ctx.message ? ctx.message.caption : '');
-    
+
     if (!text) return;
 
     logger.info(`Received msg from ${ctx.from?.id} in ${ctx.chat.type} chat: ${text.substring(0, 50)}...`);
@@ -85,10 +82,10 @@ async function main() {
   // Launch bot with retry logic for network issues (common on Hugging Face)
   const maxRetries = 10;
   let retries = 0;
-  
+
   // Pre-flight check: Wait for internet to be reachable
   logger.info('Waiting for network to be ready...');
-  
+
   while (retries < maxRetries) {
     try {
       await bot.launch();
@@ -97,9 +94,9 @@ async function main() {
     } catch (error: any) {
       retries++;
       const isDnsError = error.message?.includes('ENOTFOUND') || error.message?.includes('EAI_AGAIN');
-      
+
       logger.error(`Failed to start bot (Attempt ${retries}/${maxRetries}): ${error.message}`);
-      
+
       if (retries >= maxRetries) {
         logger.error('CRITICAL: All startup attempts failed.');
         throw error;
@@ -107,9 +104,9 @@ async function main() {
 
       // If it's a DNS error, wait longer
       const baseWait = isDnsError ? 10000 : 5000;
-      const waitTime = Math.min(Math.pow(1.5, retries - 1) * baseWait, 60000); 
-      
-      logger.info(`Retrying in ${Math.round(waitTime/1000)}s...`);
+      const waitTime = Math.min(Math.pow(1.5, retries - 1) * baseWait, 60000);
+
+      logger.info(`Retrying in ${Math.round(waitTime / 1000)}s...`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
   }
