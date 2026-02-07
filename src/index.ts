@@ -8,9 +8,24 @@ import { rateLimitMiddleware } from './middleware/rateLimitMiddleware.js';
 import { scheduleCleanup } from './services/fileService.js';
 import { logger } from './utils/logger.js';
 import http from 'http';
+import dns from 'dns';
 
 async function main() {
   logger.info('Starting Telegram Video Downloader Bot...');
+
+  // Manually set DNS servers to bypass platform DNS issues
+  try {
+    dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+    logger.info('Custom DNS servers configured (Google/Cloudflare)');
+  } catch (err) {
+    logger.warn('Could not set custom DNS servers, using system default');
+  }
+
+  // Pre-flight check: Try to resolve telegram API
+  dns.lookup('api.telegram.org', (err, address) => {
+    if (err) logger.error('DNS Lookup Test Failed: api.telegram.org could not be resolved');
+    else logger.info(`DNS Lookup Test Successful: api.telegram.org resolved to ${address}`);
+  });
 
   // Start a simple dummy HTTP server for health checks (required by some hosting platforms like Hugging Face)
   const port = process.env.PORT || 7860;
