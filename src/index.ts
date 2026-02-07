@@ -67,12 +67,30 @@ async function main() {
     bot.stop('SIGTERM');
   });
 
-  // Launch bot
-  await bot.launch();
-  logger.info('Bot is running!');
+  // Launch bot with retry logic for network issues (common on Hugging Face)
+  const maxRetries = 5;
+  let retries = 0;
+  
+  while (retries < maxRetries) {
+    try {
+      await bot.launch();
+      logger.info('Bot is running!');
+      break;
+    } catch (error) {
+      retries++;
+      logger.error(`Failed to start bot (Attempt ${retries}/${maxRetries}):`, error as Error);
+      if (retries >= maxRetries) {
+        throw error;
+      }
+      // Wait before retrying (exponential backoff: 5s, 10s, 20s...)
+      const waitTime = Math.pow(2, retries - 1) * 5000;
+      logger.info(`Retrying in ${waitTime/1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+  }
 }
 
 main().catch((error) => {
-  logger.error('Failed to start bot', error);
+  logger.error('Final attempt failed, exiting:', error);
   process.exit(1);
 });
