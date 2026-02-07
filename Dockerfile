@@ -14,7 +14,6 @@ RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o 
     chmod a+rx /usr/local/bin/yt-dlp
 
 # Set environment variables
-ENV NODE_ENV=production
 ENV YT_DLP_PATH=/usr/local/bin/yt-dlp
 ENV PORT=7860
 
@@ -38,6 +37,7 @@ RUN mkdir -p /app/downloads && chmod 777 /app/downloads
 
 # Hugging Face runs as a non-root user (UID 1000)
 # Make sure the user has access to the app directory
+ENV NODE_ENV=production
 RUN useradd -m -u 1000 user
 RUN chown -R user:user /app
 USER user
