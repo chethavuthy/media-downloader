@@ -315,22 +315,60 @@ export async function isAlbum(url: string): Promise<boolean> {
         url.includes('/share/r/') ||
         url.includes('/share/v/')
       ) {
+        logger.info('Detected Facebook video (watch/reel), will use yt-dlp');
         return false;
       }
-      // Include photo/share/album/post patterns
-      if (url.includes('photo.php') || url.includes('permalink.php') || url.includes('/share/') || url.includes('/photos/') || url.includes('/posts/')) {
+
+      // For /share/p/ links, we need to check if it's a video or photo
+      if (url.includes('/share/p/')) {
+        try {
+          // Quick probe with yt-dlp to see if it's a video
+          const { stdout } = await execAsync(
+            `"${config.ytDlpPath}" "${url}" --print "%(ext)s" --no-warnings 2>&1`,
+            { timeout: 10000 }
+          );
+          const ext = stdout.trim().toLowerCase();
+
+          // If it's a video format, use yt-dlp
+          if (['mp4', 'webm', 'mkv', 'm4v'].includes(ext)) {
+            logger.info('Detected Facebook video (share/p), will use yt-dlp');
+            return false;
+          }
+
+          // Otherwise it's likely a photo/album
+          logger.info('Detected Facebook photo/album (share/p), will attempt image download');
+          return true;
+        } catch {
+          // If probe fails, assume it's a photo/album
+          logger.info('Facebook share/p probe failed, assuming photo/album');
+          return true;
+        }
+      }
+
+      // Include photo/album/post patterns (but not generic /share/)
+      if (url.includes('photo.php') || url.includes('permalink.php') || url.includes('/photos/') || url.includes('/posts/')) {
         logger.info('Detected Facebook photo/album/post, will attempt image download');
         return true;
       }
     }
 
-    // TikTok detection
+    // TikTok detection - only treat as album if it's an actual photo carousel
     if (url.includes('tiktok.com')) {
       try {
         const galleryDlPath = config.galleryDlPath;
-        const { stdout } = await execAsync(`${galleryDlPath} "${url}" --get-urls 2>&1`, { timeout: 10000 });
+        const { stdout } = await execAsync(`${galleryDlPath} \"${url}\" --get-urls 2>&1`, { timeout: 10000 });
         const urls = stdout.trim().split('\n').filter(line => line.startsWith('http'));
-        return urls.length > 0;
+
+        // Only treat as album if there are MULTIPLE image URLs (photo carousel)
+        // Single video URLs should use yt-dlp for proper aspect ratio
+        if (urls.length > 1) {
+          logger.info('Detected TikTok photo carousel (multiple images)');
+          return true;
+        }
+
+        // Single URL = regular video, use yt-dlp
+        logger.info('Detected TikTok video (single item), will use yt-dlp');
+        return false;
       } catch {
         return false;
       }
