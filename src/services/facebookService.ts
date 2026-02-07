@@ -81,7 +81,7 @@ export async function downloadFacebookVideo(url: string, outputPath: string): Pr
   try {
     logger.info('Strategy 1: Trying with browser cookies');
     await execAsync(
-      `"${config.ytDlpPath}" "${url}" -o "${outputPath}" --cookies-from-browser chrome --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" --no-warnings 2>&1`,
+      `"${config.ytDlpPath}" "${url}" -o "${outputPath}" -f "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best" --merge-output-format mp4 --cookies-from-browser chrome --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" --no-warnings 2>&1`,
       { timeout: 60000 }
     );
     
@@ -107,7 +107,7 @@ export async function downloadFacebookVideo(url: string, outputPath: string): Pr
   try {
     logger.info('Strategy 2: Trying direct download');
     await execAsync(
-      `"${config.ytDlpPath}" "${url}" -o "${outputPath}" --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" --no-check-certificates --no-warnings 2>&1`,
+      `"${config.ytDlpPath}" "${url}" -o "${outputPath}" -f "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best" --merge-output-format mp4 --user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" --no-check-certificates --no-warnings 2>&1`,
       { timeout: 60000 }
     );
     

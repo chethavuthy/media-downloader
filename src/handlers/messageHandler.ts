@@ -122,20 +122,92 @@ export function setupJobProcessor(telegram: Telegram): void {
 
       const caption = getRandomCompletionPhrase();
 
-      // Send media to user
-      if (isPhoto) {
-        // Change action to photo if applicable
-        await telegram.sendChatAction(job.chatId, 'upload_photo').catch(() => {});
-        
-        await telegram.sendPhoto(job.chatId, { source: actualPath }, {
-          caption: caption,
-          reply_parameters: { message_id: job.messageId },
-        });
-      } else {
-        await telegram.sendVideo(job.chatId, { source: actualPath }, {
-          caption: caption,
-          reply_parameters: { message_id: job.messageId },
-        });
+      // Get video dimensions for Telegram (accounting for rotation metadata)
+      let videoWidth: number | undefined;
+      let videoHeight: number | undefined;
+      
+      if (!isPhoto) {
+        try {
+          const { exec } = await import('child_process');
+          const { promisify } = await import('util');
+          const execAsync = promisify(exec);
+
+          // Get rotation metadata
+          const { stdout: rotationCheck } = await execAsync(
+            `ffprobe -v error -select_streams v:0 -show_entries stream_tags=rotate -of default=nw=1:nk=1 "${actualPath}"`
+          ).catch(() => ({ stdout: '' }));
+
+          const rotation = parseInt(rotationCheck.trim()) || 0;
+          
+          // Get video dimensions
+          const { stdout } = await execAsync(
+            `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "${actualPath}"`
+          );
+          
+          const dimensions = stdout.trim().split('x');
+          if (dimensions.length === 2) {
+            let width = parseInt(dimensions[0]);
+            let height = parseInt(dimensions[1]);
+            
+            // If video is rotated 90° or 270°, swap width and height for Telegram
+            if (rotation === 90 || rotation === 270 || rotation === -90) {
+              [width, height] = [height, width];
+              logger.info(`Video rotated ${rotation}°, swapping dimensions: ${width}x${height}`);
+            }
+            
+            videoWidth = width;
+            videoHeight = height;
+            logger.info(`Sending video dimensions to Telegram: ${videoWidth}x${videoHeight}`);
+          }
+        } catch (err: any) {
+          logger.warn(`Could not detect video dimensions: ${err.message || err}`);
+        }
+      }
+
+      // Send media to user with retry logic for SSL errors
+      const maxRetries = 3;
+      let retries = 0;
+      let uploadSuccess = false;
+
+      while (retries < maxRetries && !uploadSuccess) {
+        try {
+          if (isPhoto) {
+            // Change action to photo if applicable
+            await telegram.sendChatAction(job.chatId, 'upload_photo').catch(() => {});
+            
+            await telegram.sendPhoto(job.chatId, { source: actualPath }, {
+              caption: caption,
+              reply_parameters: { message_id: job.messageId },
+            });
+          } else {
+            await telegram.sendVideo(job.chatId, { source: actualPath }, {
+              caption: caption,
+              reply_parameters: { message_id: job.messageId },
+              supports_streaming: true,
+              width: videoWidth,
+              height: videoHeight,
+            });
+          }
+          uploadSuccess = true;
+        } catch (uploadError: any) {
+          retries++;
+          const isSslError = uploadError.message?.includes('SSL') || uploadError.message?.includes('ECONNRESET');
+          
+          if (retries >= maxRetries) {
+            // If all retries failed, send as document instead
+            logger.warn(`Upload failed after ${maxRetries} attempts, sending as document`);
+            await telegram.sendDocument(job.chatId, { source: actualPath }, {
+              caption: `${caption}\n\n⚠️ Sent as file due to upload issues`,
+              reply_parameters: { message_id: job.messageId },
+            });
+            uploadSuccess = true;
+          } else if (isSslError) {
+            logger.warn(`SSL error on attempt ${retries}/${maxRetries}, retrying in ${retries * 2}s...`);
+            await new Promise(resolve => setTimeout(resolve, retries * 2000));
+          } else {
+            throw uploadError;
+          }
+        }
       }
 
       // Cleanup
