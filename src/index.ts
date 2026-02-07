@@ -4,7 +4,6 @@ import { config } from './config/index.js';
 import { handleStart } from './handlers/startHandler.js';
 import { handleMessage, setupJobProcessor } from './handlers/messageHandler.js';
 import { handleGroupMessage } from './handlers/groupHandler.js';
-import { rateLimitMiddleware } from './middleware/rateLimitMiddleware.js';
 import { scheduleCleanup } from './services/fileService.js';
 import { logger } from './utils/logger.js';
 import http from 'http';
