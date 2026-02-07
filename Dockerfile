@@ -33,8 +33,8 @@ COPY . .
 # Build the project
 RUN npm run build
 
-# Create temp directory and set permissions
-RUN mkdir -p /app/temp && chmod 777 /app/temp
+# Create downloads directory and set permissions
+RUN mkdir -p /app/downloads && chmod 777 /app/downloads
 
 # Hugging Face runs as a non-root user (UID 1000)
 # Make sure the user has access to the app directory
