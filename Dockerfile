@@ -1,5 +1,5 @@
-# Use official Node.js image
-FROM node:20
+# Use Node.js slim for a cleaner network stack
+FROM node:20-slim
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -12,9 +12,11 @@ RUN apt-get update && apt-get install -y \
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
     chmod a+rx /usr/local/bin/yt-dlp
 
-# Set environment variables for the build
+# Set environment variables
 ENV YT_DLP_PATH=/usr/local/bin/yt-dlp
 ENV PORT=7860
+# Force Node.js to prefer IPv4 (fixes many ENOTFOUND issues in cloud environments)
+ENV NODE_OPTIONS="--dns-result-order=ipv4first"
 
 # Create app directory
 WORKDIR /app

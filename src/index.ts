@@ -68,29 +68,41 @@ async function main() {
   });
 
   // Launch bot with retry logic for network issues (common on Hugging Face)
-  const maxRetries = 5;
+  const maxRetries = 10;
   let retries = 0;
+  
+  // Pre-flight check: Wait for internet to be reachable
+  logger.info('Waiting for network to be ready...');
   
   while (retries < maxRetries) {
     try {
       await bot.launch();
-      logger.info('Bot is running!');
+      logger.info('Bot is running successfully!');
       break;
-    } catch (error) {
+    } catch (error: any) {
       retries++;
-      logger.error(`Failed to start bot (Attempt ${retries}/${maxRetries}):`, error as Error);
+      const isDnsError = error.message?.includes('ENOTFOUND') || error.message?.includes('EAI_AGAIN');
+      
+      logger.error(`Failed to start bot (Attempt ${retries}/${maxRetries}): ${error.message}`);
+      
       if (retries >= maxRetries) {
+        logger.error('CRITICAL: All startup attempts failed.');
         throw error;
       }
-      // Wait before retrying (exponential backoff: 5s, 10s, 20s...)
-      const waitTime = Math.pow(2, retries - 1) * 5000;
-      logger.info(`Retrying in ${waitTime/1000}s...`);
+
+      // If it's a DNS error, wait longer
+      const baseWait = isDnsError ? 10000 : 5000;
+      const waitTime = Math.min(Math.pow(1.5, retries - 1) * baseWait, 60000); 
+      
+      logger.info(`Retrying in ${Math.round(waitTime/1000)}s...`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
   }
 }
 
 main().catch((error) => {
-  logger.error('Final attempt failed, exiting:', error);
-  process.exit(1);
+  logger.error('Startup failed:', error);
+  // Important: On Hugging Face, don't exit(1) immediately if the health check server is running
+  // but let's keep it for now to trigger a Container restart if everything fails
+  setTimeout(() => process.exit(1), 5000);
 });
