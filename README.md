@@ -1,3 +1,12 @@
+---
+title: ClipSniper
+emoji: 🎬
+colorFrom: blue
+colorTo: red
+sdk: docker
+pinned: false
+---
+
 # 🎬 Telegram Video Downloader Bot
 
 A production-ready Telegram bot that downloads videos from multiple platforms with Khmer 🇰🇭 and English 🇬🇧 language support.
@@ -64,7 +73,6 @@ npm run dev
 **Production mode**:
 ```bash
 npm run build
-npm start
 ```
 
 ## 📖 Usage
@@ -107,19 +115,7 @@ src/
 ├── locales/         # Khmer and English translations
 ├── utils/           # Utility functions (logger, URL detection)
 ├── services/        # Core business logic
-│   ├── userService.ts       # User preferences
-│   ├── videoService.ts      # Video downloading (yt-dlp)
-│   ├── queueService.ts      # Async job queue
-│   ├── rateLimitService.ts  # Rate limiting
-│   └── fileService.ts       # File management
 ├── handlers/        # Telegram message handlers
-│   ├── startHandler.ts      # /start command & language selection
-│   ├── messageHandler.ts    # Private chat messages
-│   ├── groupHandler.ts      # Group chat messages
-│   └── errorHandler.ts      # Error handling
-├── middleware/      # Telegraf middleware
-│   ├── languageMiddleware.ts
-│   └── rateLimitMiddleware.ts
 └── index.ts         # Main application entry point
 ```
 
@@ -137,21 +133,16 @@ npm run lint
 
 ## 🐛 Troubleshooting
 
-### "Cannot find module 'yt-dlp-exec'"
-- Run `npm install` to install dependencies
-
 ### "yt-dlp not found"
 - Install yt-dlp system-wide: `brew install yt-dlp` (macOS)
 
 ### "Download failed" errors
 - Check if the video is private or geo-restricted
-- Update yt-dlp: `brew upgrade yt-dlp` (macOS)
 - Some platforms may block downloads - this is expected
 
 ### Bot doesn't respond
 - Verify `TELEGRAM_BOT_TOKEN` is set correctly in `.env`
 - Check bot logs for errors
-- Ensure bot is not blocked by the user/group
 
 ## 📝 License
 
@@ -161,3 +152,5 @@ MIT
 
 - [Telegraf](https://telegraf.js.org/) - Telegram Bot API framework
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Video downloader
+
+Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
