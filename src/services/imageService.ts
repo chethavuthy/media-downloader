@@ -354,10 +354,23 @@ export async function isAlbum(url: string): Promise<boolean> {
 
     // TikTok detection - only treat as album if it's an actual photo carousel
     if (url.includes('tiktok.com')) {
+      // If URL contains /photo/, it's definitely a photo carousel
+      if (url.includes('/photo/')) {
+        logger.info('Detected TikTok photo carousel (URL contains /photo/)');
+        return true;
+      }
+
       try {
         const galleryDlPath = config.galleryDlPath;
-        const { stdout } = await execAsync(`${galleryDlPath} \"${url}\" --get-urls 2>&1`, { timeout: 10000 });
+        const { stdout, stderr } = await execAsync(`${galleryDlPath} \"${url}\" --get-urls 2>&1`, { timeout: 10000 });
+        const output = (stdout + (stderr || '')).toLowerCase();
         const urls = stdout.trim().split('\n').filter(line => line.startsWith('http'));
+
+        // Check if output contains '/photo/' (indicates photo carousel after redirect)
+        if (output.includes('/photo/')) {
+          logger.info('Detected TikTok photo carousel (gallery-dl output contains /photo/)');
+          return true;
+        }
 
         // Only treat as album if there are MULTIPLE image URLs (photo carousel)
         // Single video URLs should use yt-dlp for proper aspect ratio
