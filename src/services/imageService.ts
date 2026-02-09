@@ -292,45 +292,12 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
             logger.info(`mbasic scraping returned ${stdout.length} bytes`);
           }
 
-          // Tier 4: Embed Plugin Fallback (Extremely robust for public posts)
-          if (!stdout || stdout.includes('Connectez-vous') || stdout.includes('Log In') || stdout.length < 10000) {
-            try {
-              // Use the surefire /facebook/posts/ID if we have fbid, otherwise resolvedUrl
-              const pluginHref = fbid ? `https://www.facebook.com/facebook/posts/${fbid}` : (resolvedUrl || targetUrl);
-              logger.info(`Attempting Tier 4 (Embed Plugin) scraping for: ${pluginHref}`);
-              const embedUrl = `https://www.facebook.com/plugins/post.php?href=${encodeURIComponent(pluginHref)}`;
-              const proxyEmbedUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(embedUrl)}`;
-              const { stdout: embedStdout } = await execAsync(`curl -sL -A "${modernUA}" "${proxyEmbedUrl}"`, { timeout: 30000 });
-              if (embedStdout && embedStdout.length > 1000) {
-                logger.info(`Embed Plugin scraping returned ${embedStdout.length} bytes`);
-                stdout = embedStdout; // Use embed content as source
-              }
-            } catch (embedError: any) {
-              logger.warn(`Embed Plugin scraping failed: ${embedError.message}`);
-            }
-          }
+          // Initial extraction from mbasic content
+          const extractImages = (content: string) => {
+            const matches = content.match(/(?:scontent|fbcdn\.net)[^\s"<>']+/g) || [];
+            let ogMatch = content.match(/property="og:image" content="([^"]+)"/) || content.match(/"og:image" content="([^"]+)"/);
 
-          // Check if content indicates video (often found in Embed Plugin or mbasic)
-          if (stdout.includes('video_id') || stdout.includes('"video_id"') || stdout.includes('swfobject')) {
-            logger.info('Embed Plugin/mbasic content indicates VIDEO. Aborting image download.');
-            return [];
-          }
-
-          // Extract scontent/fbcdn URLs with high flexibility (handles escaped slashes)
-          const allMatches = stdout.match(/(?:scontent|fbcdn\.net)[^\s"<>']+/g);
-
-          if (allMatches && allMatches.length > 0) {
-            logger.info(`Found ${allMatches.length} raw scontent/fbcdn matches. First 5: ${JSON.stringify(allMatches.slice(0, 5))}`);
-          }
-
-          // Also try to extract og:image if no matches found directly in text/attributes
-          let ogImageMatch = stdout.match(/property=\"og:image\" content=\"([^\"]+)\"/);
-          if (!ogImageMatch) ogImageMatch = stdout.match(/\"og:image\" content=\"([^\"]+)\"/);
-
-          let imageUrls: string[] = [];
-
-          if (allMatches && allMatches.length > 0) {
-            imageUrls = allMatches
+            let urls = matches
               .map(u => {
                 let cleanUrl = u.replace(/&amp;/g, '&').replace(/\\\//g, '/');
                 if (!cleanUrl.startsWith('http')) cleanUrl = 'https://' + cleanUrl;
@@ -341,15 +308,47 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
                 const lowerUrl = u.toLowerCase();
                 const hasExt = lowerUrl.includes('.jpg') || lowerUrl.includes('.jpeg') || lowerUrl.includes('.png') || lowerUrl.includes('.kf') || lowerUrl.includes('_nc_');
                 const isStatic = u.includes('rsrc.php') || u.includes('emoji.php') || u.includes('/catalog/') || u.includes('ad_') || lowerUrl.includes('t15.') || lowerUrl.includes('/t15/') || lowerUrl.includes('t16.');
-
-                if (hasDomain && hasExt && !isStatic) return true;
-                return false;
+                return hasDomain && hasExt && !isStatic;
               });
+
+            if (urls.length === 0 && ogMatch) {
+              urls = [ogMatch[1].replace(/&amp;/g, '&').replace(/\\\//g, '/')];
+            }
+            return urls;
+          };
+
+          let imageUrls = extractImages(stdout);
+          logger.info(`Initial mbasic sweep found ${imageUrls.length} image URLs`);
+
+          // Tier 4: Embed Plugin Fallback (Trigger if no images OR login wall)
+          const isLoginWall = stdout.includes('Connectez-vous') || stdout.includes('Log In') || (stdout.length > 0 && stdout.length < 5000);
+
+          if (imageUrls.length === 0 || isLoginWall) {
+            logger.info(`mbasic failed (URLs: ${imageUrls.length}, LoginWall: ${isLoginWall}). Attempting Tier 4 (Embed Plugin)...`);
+            try {
+              const pluginHref = fbid ? `https://www.facebook.com/facebook/posts/${fbid}` : (resolvedUrl || targetUrl);
+              const embedUrl = `https://www.facebook.com/plugins/post.php?href=${encodeURIComponent(pluginHref)}`;
+              const proxyEmbedUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(embedUrl)}`;
+              const { stdout: embedStdout } = await execAsync(`curl -sL -A "${modernUA}" "${proxyEmbedUrl}"`, { timeout: 30000 });
+
+              if (embedStdout && embedStdout.length > 1000) {
+                logger.info(`Embed Plugin scraping returned ${embedStdout.length} bytes`);
+                const embedUrls = extractImages(embedStdout);
+                if (embedUrls.length > 0) {
+                  logger.info(`Embed Plugin rescued the download with ${embedUrls.length} images!`);
+                  imageUrls = embedUrls;
+                  stdout = embedStdout; // Update content for video check
+                }
+              }
+            } catch (embedError: any) {
+              logger.warn(`Embed Plugin scraping failed: ${embedError.message}`);
+            }
           }
 
-          if (imageUrls.length === 0 && ogImageMatch) {
-            logger.info('Using og:image from meta tags as fallback');
-            imageUrls = [ogImageMatch[1].replace(/&amp;/g, '&').replace(/\\\//g, '/')];
+          // Check if final content indicates video
+          if (stdout.includes('video_id') || stdout.includes('"video_id"') || stdout.includes('swfobject')) {
+            logger.info('Content indicates VIDEO. Aborting image download.');
+            return [];
           }
 
           logger.info(`mbasic filtered to ${imageUrls.length} valid image URLs`);
@@ -359,23 +358,15 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
 
           if (imageUrls.length > 0) {
             imageUrls.forEach(u => {
-              // Extract unique content ID from filename (e.g. 123_456_789_n.jpg -> 456 usually)
-              // URL structure varies but often contains: .../v/t1.15752-9/123_456_789_n.jpg...
-              // or .../p526x296/123_456_789_n.jpg...
               const idMatch = u.match(/(\d+)_(\d+)_(\d+)_[a-z]\.jpg/);
               let contentId = 'default';
 
               if (idMatch) {
-                // Usually the middle one is the unique photo ID, or the one that varies
-                // For safety, we can key by the longest number sequence if unsure, but typically group 2 is good
                 contentId = idMatch[2];
               } else {
-                // Fallback: try to hash the URL or use index if we can't parse ID
-                // But for now, let's just treat unparseable URLs as a single group 'misc'
-                // or skip if we want to be strict.
-                // Let's try to find any long number
                 const anyNum = u.match(/\/(\d+)_/);
-                if (anyNum) contentId = anyNum[1];
+                if (anyNum) contentId = anyNum[1] || 'misc';
+                else contentId = 'og_image';
               }
 
               if (!imageGroups.has(contentId)) {
@@ -383,12 +374,6 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
               }
               imageGroups.get(contentId)?.push(u);
             });
-          }
-
-          if (imageGroups.size === 0 && ogImageMatch) {
-            // Fallback to og:image if no groups found
-            logger.info('Using og:image as fallback (no scontent groups found)');
-            imageGroups.set('og_image', [ogImageMatch[1].replace(/&amp;/g, '&').replace(/\\\//g, '/')]);
           }
 
           logger.info(`Found ${imageGroups.size} unique image content groups`);
