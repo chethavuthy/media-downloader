@@ -690,19 +690,13 @@ export async function isAlbum(url: string): Promise<boolean> {
         url.includes('/watch') ||
         url.includes('/reel/') ||
         url.includes('/reels/') ||
-        url.includes('fb.watch') ||
-        url.includes('/share/r/') ||
-        url.includes('/share/v/')
+        url.includes('fb.watch')
       ) {
         logger.info('Detected Facebook video (watch/reel), will use yt-dlp');
         return false;
       }
 
-      // Explicit video shares
-      if (url.includes('/share/v/') || url.includes('/videos/') || url.includes('/reel/') || url.includes('/watch/')) {
-        logger.info('Detected Facebook video URL pattern, skipping album check');
-        return false;
-      }
+
 
       // For /share/ links (p, r, or generic), we need to check if it's a video or photo
       if (url.includes('/share/')) {
@@ -735,7 +729,7 @@ export async function isAlbum(url: string): Promise<boolean> {
 
             // Tier 2: Proxy Fallback via codetabs to check meta tags
             const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(bestUrl)}`;
-            const { stdout: content } = await execAsync(`curl -sL "${proxyUrl}"`, { timeout: 15000 });
+            const { stdout: content } = await execAsync(`curl -sL "${proxyUrl}"`, { timeout: 30000 });
 
             if (content.includes('og:video') || content.includes('\"video_id\":\"')) {
               logger.info('Detected Facebook video (share/p) via proxy content');
@@ -751,14 +745,35 @@ export async function isAlbum(url: string): Promise<boolean> {
               const pluginUrlForCheck = checkFbid ? `https://www.facebook.com/facebook/posts/${checkFbid}` : bestUrl;
               const embedUrl = `https://www.facebook.com/plugins/post.php?href=${encodeURIComponent(pluginUrlForCheck)}`;
               const proxyEmbedUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(embedUrl)}`;
-              const { stdout: embedContent } = await execAsync(`curl -sL "${proxyEmbedUrl}"`, { timeout: 15000 });
+              const { stdout: embedContent } = await execAsync(`curl -sL "${proxyEmbedUrl}"`, { timeout: 20000 });
               if (embedContent.includes('swfobject') || embedContent.includes('video_id') || embedContent.includes('\"video_id\"')) {
                 logger.info('Detected Facebook video (share/p) via Embed Plugin');
                 return false;
               }
             }
           } catch (e) {
-            logger.warn('Proxy resolution in isAlbum failed, falling back to assuming photo');
+            logger.warn('Initial proxy (Codetabs) in isAlbum failed, trying AllOrigins...');
+            try {
+              const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+              const { stdout: proxyJson } = await execAsync(`curl -s "${proxyUrl}"`, { timeout: 30000 });
+              if (proxyJson && proxyJson.startsWith('{')) {
+                const proxyData = JSON.parse(proxyJson);
+                const content = proxyData.contents || '';
+                if (content.includes('og:video') || content.includes('\"video_id\":\"')) {
+                  logger.info('Detected Facebook video (share/p) via AllOrigins proxy');
+                  return false;
+                }
+              }
+            } catch (ae) {
+              logger.error('All proxy resolution fallbacks in isAlbum failed');
+            }
+          }
+
+          // Final Fallback: If we couldn't resolve/probe AND it's a v/r link, be optimistic
+          // and assume it might be a hybrid album (like share/v/ posts with photos).
+          if (url.includes('/share/v/') || url.includes('/share/r/')) {
+            logger.info('Uncertain /share/v or /share/r link, assuming album/hybrid first');
+            return true;
           }
 
           return true;

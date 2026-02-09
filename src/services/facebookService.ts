@@ -29,15 +29,16 @@ async function getVideoUrlFromAPI(fbUrl: string): Promise<string | null> {
 /**
  * Resolve Facebook share links to canonical URLs (handling share/r/ etc)
  */
-async function resolveFacebookShareLink(url: string): Promise<string> {
-  if (!url.includes('share/') && !url.includes('share.php')) return url;
+export async function resolveFacebookShareLink(url: string): Promise<string> {
+  if (!url.includes('share/') && !url.includes('share.php') && !url.includes('fb.watch')) return url;
 
+  const resolutionUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+
+  // Tier 1: Quick local resolution
   try {
-    const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
-    // Try simple curl -I first
-    const { stdout } = await execAsync(`curl -sL -I -o /dev/null -w "%{url_effective}" -A "${userAgent}" "${url}"`, { timeout: 15000 });
+    const { stdout } = await execAsync(`curl -sL -I -o /dev/null -w "%{url_effective}" -A "${resolutionUA}" "${url}"`, { timeout: 15000 });
     const resolved = stdout.trim();
-    if (resolved && resolved !== url && !resolved.includes('login')) {
+    if (resolved && resolved !== url && !resolved.includes('/login') && !resolved.includes('checkpoint')) {
       logger.info(`Resolved share link: ${url} -> ${resolved}`);
       return resolved;
     }
@@ -45,38 +46,59 @@ async function resolveFacebookShareLink(url: string): Promise<string> {
     logger.warn('Direct resolution failed, trying proxy...');
   }
 
-  // Tier 2: Proxy Fallback
+  // Tier 2: Proxy Fallback (Codetabs)
+  let content = '';
   try {
     const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
-    const userAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
-    const { stdout } = await execAsync(`curl -sL -A "${userAgent}" "${proxyUrl}"`, { timeout: 30000 });
+    const { stdout } = await execAsync(`curl -sL "${proxyUrl}"`, { timeout: 30000 });
+    content = stdout;
+  } catch (e) {
+    logger.warn('Codetabs proxy failed, trying AllOrigins...');
+    try {
+      // Tier 3: AllOrigins proxy
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+      const { stdout: proxyJson } = await execAsync(`curl -s "${proxyUrl}"`, { timeout: 30000 });
+      if (proxyJson && proxyJson.startsWith('{')) {
+        const proxyData = JSON.parse(proxyJson);
+        content = proxyData.contents || '';
+      }
+    } catch (ae) {
+      logger.error('All proxy resolutions failed');
+    }
+  }
 
-    // Extract Reel ID from login redirects or canonical links
-    // Matches /reel/123456 or reel_id=123456
-    const reelMatch = stdout.match(/reel\/(\d+)/) || stdout.match(/videos\/(\d+)/);
-    if (reelMatch) {
-      const id = reelMatch[1];
-      const resolved = `https://www.facebook.com/reel/${id}`;
-      logger.info(`Resolved share link via proxy to: ${resolved}`);
+  if (content) {
+    // 1. Check for canonical link (usually has the cleanest format)
+    const canonicalMatch = content.match(/link rel=\"canonical\" href=\"([^"]+)\"/);
+    if (canonicalMatch && !canonicalMatch[1].includes('/login')) {
+      const canonical = canonicalMatch[1];
+      logger.info(`Resolved share link via proxy to canonical: ${canonical}`);
+      return canonical;
+    }
+
+    // 2. Extract Reel/Video ID patterns
+    const idMatch = content.match(/reel\/(\d+)/) ||
+      content.match(/videos\/(\d+)/) ||
+      content.match(/videos\/[^\/]+\/(\d+)/) ||
+      content.match(/\"video_id\":\"(\d+)\"/);
+
+    if (idMatch) {
+      const id = idMatch[1];
+      const resolved = content.includes('reel') ? `https://www.facebook.com/reel/${id}` : `https://www.facebook.com/videos/${id}`;
+      logger.info(`Resolved share link via proxy ID extraction to: ${resolved}`);
       return resolved;
     }
 
-    // Also check for encoded URLs in login links
-    // next=...reel%2F3034...
-    const encodedMatch = stdout.match(/reel%2F(\d+)/);
+    // 3. Encoded URLs in redirects
+    const encodedMatch = content.match(/reel%2F(\d+)/) || content.match(/videos%2F(\d+)/);
     if (encodedMatch) {
       const id = encodedMatch[1];
-      const resolved = `https://www.facebook.com/reel/${id}`;
+      const resolved = content.includes('reel') ? `https://www.facebook.com/reel/${id}` : `https://www.facebook.com/videos/${id}`;
       logger.info(`Resolved share link via proxy (encoded) to: ${resolved}`);
       return resolved;
     }
-
-  } catch (e: any) {
-    logger.warn(`Proxy resolution failed: ${e.message}`);
   }
 
-  // If direct resolution failed, we might need to rely on the Embed Plugin handling the share link directly
-  // or try a proxy resolution if critical. For now, return original if failed.
   return url;
 }
 

@@ -10,7 +10,7 @@ import { getText } from '../locales/index.js';
 import { logger } from '../utils/logger.js';
 import { Telegram } from 'telegraf';
 
-import { getRandomReaction } from '../utils/reactions.js';
+import { getRandomReaction, getRandomFailedReaction } from '../utils/reactions.js';
 import { getRandomCompletionPhrase } from '../utils/phrases.js';
 import { downloadAlbum, isAlbum } from '../services/imageService.js';
 
@@ -347,9 +347,16 @@ export function setupJobProcessor(telegram: Telegram): void {
 
       // Send error message
       try {
-        await telegram.sendMessage(job.chatId, getText(job.userId, 'downloadFailed'));
+        // Apply failed reaction instead of text message
+        const failedReaction = getRandomFailedReaction();
+        await telegram.setMessageReaction(job.chatId, job.messageId, [
+          { type: 'emoji', emoji: failedReaction as any }
+        ]).catch(() => { });
+
+        // Suppress text message as requested
+        // await telegram.sendMessage(job.chatId, getText(job.userId, 'downloadFailed'));
       } catch (sendError) {
-        logger.error('Failed to send error message', sendError as Error);
+        logger.error('Failed to update reaction on failure', sendError as Error);
       }
     } finally {
       clearInterval(actionInterval);
