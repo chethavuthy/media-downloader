@@ -17,7 +17,7 @@ export async function handleGroupMessage(ctx: Context<Update.MessageUpdate>): Pr
   }
 
   const text = 'text' in message ? message.text : ('caption' in message ? message.caption : '');
-  
+
   if (!text) {
     return;
   }
@@ -51,12 +51,16 @@ export async function handleGroupMessage(ctx: Context<Update.MessageUpdate>): Pr
     // Show bot is uploading/processing
     try {
       await ctx.sendChatAction('upload_video');
+    } catch (e) {
+      logger.error('Failed to send chat action upload_video', e as Error);
+    }
 
-      // Add random reaction to the message
-      const randomReaction = getRandomReaction();
+    // Add random reaction to the message
+    const randomReaction = getRandomReaction();
+    try {
       await ctx.react(randomReaction as any);
     } catch (e) {
-      logger.error('Failed to send reaction in group', e as Error);
+      logger.error(`Failed to send reaction [${randomReaction}] in group`, e as Error);
     }
 
     // Send acknowledgment in groups (commented out as requested)

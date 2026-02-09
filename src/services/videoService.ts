@@ -53,7 +53,9 @@ export async function downloadVideo(url: string, outputPath: string): Promise<st
     const isFacebook = platform === Platform.FACEBOOK;
 
     // Use specialized Facebook service for better success rate
-    if (isFacebook) {
+    // Improved detection for various FB domains (fb.watch, facebok.com, etc.)
+    if (isFacebook || url.includes('facebook.com') || url.includes('fb.watch')) {
+      logger.info('Delegating to specialized Facebook service');
       const { downloadFacebookVideo } = await import('./facebookService.js');
       return await downloadFacebookVideo(url, outputPath);
     }

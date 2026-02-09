@@ -124,104 +124,105 @@ export function setupJobProcessor(telegram: Telegram): void {
         const mediaFiles = await downloadAlbum(job.url, albumDir);
 
         if (mediaFiles.length === 0) {
-          throw new Error('No media files found in album');
-        }
+          logger.warn('Album download returned 0 files, assuming it might be a video or single post. Falling back to video/single logic...');
+          // Do NOT return here. Let it fall through to the single media download logic below.
+        } else {
+          logger.info(`Album contains ${mediaFiles.length} items`);
 
-        logger.info(`Album contains ${mediaFiles.length} items`);
-
-        if (mediaFiles.length === 1) {
-          logger.info(`Single item "album" detected, sending as single media`);
-          const media = mediaFiles[0];
-          const caption = getRandomCompletionPhrase();
-
-          if (media.type === 'photo') {
-            await telegram.sendPhoto(job.chatId, { source: media.path }, {
-              caption: caption,
-              reply_parameters: { message_id: job.messageId },
-            });
-          } else {
-            await telegram.sendVideo(job.chatId, { source: media.path }, {
-              caption: caption,
-              reply_parameters: { message_id: job.messageId },
-              supports_streaming: true,
-            });
-          }
-
-          await cleanup(albumDir);
-          return;
-        }
-
-        // Send as media groups (batches of 10)
-        const batchSize = 10;
-        const completionPhrase = getRandomCompletionPhrase();
-
-        logger.info(`Starting batch sending for ${mediaFiles.length} items`);
-
-        for (let i = 0; i < mediaFiles.length; i += batchSize) {
-          const batchNum = Math.floor(i / batchSize) + 1;
-          const totalBatches = Math.ceil(mediaFiles.length / batchSize);
-          const batch = mediaFiles.slice(i, i + batchSize);
-
-          logger.info(`Processing batch ${batchNum}/${totalBatches}: ${batch.length} items`);
-
-          // Generate caption for this batch
-          const batchSuffix = totalBatches > 1 ? ` (${batchNum}/${totalBatches})` : '';
-          const currentCaption = completionPhrase + batchSuffix;
-
-          if (batch.length === 1) {
-            logger.info(`Sending batch as single media`);
-            const media = batch[0];
+          if (mediaFiles.length === 1) {
+            logger.info(`Single item "album" detected, sending as single media`);
+            const media = mediaFiles[0];
+            const caption = getRandomCompletionPhrase();
 
             if (media.type === 'photo') {
               await telegram.sendPhoto(job.chatId, { source: media.path }, {
-                caption: currentCaption,
+                caption: caption,
                 reply_parameters: { message_id: job.messageId },
               });
             } else {
               await telegram.sendVideo(job.chatId, { source: media.path }, {
-                caption: currentCaption,
+                caption: caption,
                 reply_parameters: { message_id: job.messageId },
                 supports_streaming: true,
               });
             }
-          } else {
-            logger.info(`Sending batch as media group`);
-            const mediaGroup = batch.map((media, index) => {
-              // Only first item in each batch gets the caption
-              const caption = index === 0 ? currentCaption : undefined;
+
+            await cleanup(albumDir);
+            return;
+          }
+
+          // Send as media groups (batches of 10)
+          const batchSize = 10;
+          const completionPhrase = getRandomCompletionPhrase();
+
+          logger.info(`Starting batch sending for ${mediaFiles.length} items`);
+
+          for (let i = 0; i < mediaFiles.length; i += batchSize) {
+            const batchNum = Math.floor(i / batchSize) + 1;
+            const totalBatches = Math.ceil(mediaFiles.length / batchSize);
+            const batch = mediaFiles.slice(i, i + batchSize);
+
+            logger.info(`Processing batch ${batchNum}/${totalBatches}: ${batch.length} items`);
+
+            // Generate caption for this batch
+            const batchSuffix = totalBatches > 1 ? ` (${batchNum}/${totalBatches})` : '';
+            const currentCaption = completionPhrase + batchSuffix;
+
+            if (batch.length === 1) {
+              logger.info(`Sending batch as single media`);
+              const media = batch[0];
 
               if (media.type === 'photo') {
-                return {
-                  type: 'photo',
-                  media: { source: media.path },
-                  caption: caption,
-                };
+                await telegram.sendPhoto(job.chatId, { source: media.path }, {
+                  caption: currentCaption,
+                  reply_parameters: { message_id: job.messageId },
+                });
               } else {
-                return {
-                  type: 'video',
-                  media: { source: media.path },
-                  caption: caption,
+                await telegram.sendVideo(job.chatId, { source: media.path }, {
+                  caption: currentCaption,
+                  reply_parameters: { message_id: job.messageId },
                   supports_streaming: true,
-                };
+                });
               }
-            });
+            } else {
+              logger.info(`Sending batch as media group`);
+              const mediaGroup = batch.map((media, index) => {
+                // Only first item in each batch gets the caption
+                const caption = index === 0 ? currentCaption : undefined;
 
-            await telegram.sendMediaGroup(job.chatId, mediaGroup as any, {
-              reply_parameters: { message_id: job.messageId },
-            });
+                if (media.type === 'photo') {
+                  return {
+                    type: 'photo',
+                    media: { source: media.path },
+                    caption: caption,
+                  };
+                } else {
+                  return {
+                    type: 'video',
+                    media: { source: media.path },
+                    caption: caption,
+                    supports_streaming: true,
+                  };
+                }
+              });
+
+              await telegram.sendMediaGroup(job.chatId, mediaGroup as any, {
+                reply_parameters: { message_id: job.messageId },
+              });
+            }
+
+            // Small delay between batches
+            if (i + batchSize < mediaFiles.length) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
           }
 
-          // Small delay between batches
-          if (i + batchSize < mediaFiles.length) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
+          // Cleanup the entire album folder
+          await cleanup(albumDir);
+
+          logger.info(`Album items (${mediaFiles.length}) sent successfully: ${job.id}`);
+          return;
         }
-
-        // Cleanup the entire album folder
-        await cleanup(albumDir);
-
-        logger.info(`Album items (${mediaFiles.length}) sent successfully: ${job.id}`);
-        return;
       }
 
       // Single media download (existing logic)
