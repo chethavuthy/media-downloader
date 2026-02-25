@@ -54,4 +54,4 @@ ENV NODE_ENV=production
 EXPOSE 7860
 
 # Run the bot
-CMD ["node", "dist/index.js"]
+CMD ["node", "--max-old-space-size=180", "dist/index.js"]

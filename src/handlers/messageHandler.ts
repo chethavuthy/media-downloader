@@ -1,6 +1,6 @@
 import { Context } from 'telegraf';
 import { Update } from 'telegraf/types';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { DownloadJob, JobStatus } from '../types/index.js';
 import { extractUrls, isVideoUrl, normalizeUrl, detectPlatform } from '../utils/urlDetector.js';
 import { validateUrl, downloadVideo } from '../services/videoService.js';
@@ -59,7 +59,7 @@ export async function handleMessage(ctx: Context<Update.MessageUpdate>): Promise
     recordRequest(userId);
 
     // Create download job
-    const jobId = uuidv4();
+    const jobId = randomUUID();
     const job: DownloadJob = {
       id: jobId,
       url: normalizedUrl,
@@ -261,43 +261,38 @@ export function setupJobProcessor(telegram: Telegram): void {
           const { promisify } = await import('util');
           const execAsync = promisify(exec);
 
-          // Get rotation metadata
-          const { stdout: rotationCheck } = await execAsync(
-            `ffprobe -v error -select_streams v:0 -show_entries stream_tags=rotate -of default=nw=1:nk=1 "${actualPath}"`
-          ).catch(() => ({ stdout: '' }));
-
-          const rotation = parseInt(rotationCheck.trim()) || 0;
-
-          // Get video dimensions
+          // Get all metadata in one call to save CPU/processes
+          // -select_streams v:0 returns video stream metadata
+          // -show_entries allows selecting specific fields
           const { stdout } = await execAsync(
-            `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "${actualPath}"`
+            `ffprobe -v error -select_streams v:0 -show_entries stream=width,height,duration:stream_tags=rotate -show_entries format=duration -of json "${actualPath}"`
           );
 
-          const dimensions = stdout.trim().split('x');
-          if (dimensions.length === 2) {
-            let width = parseInt(dimensions[0]);
-            let height = parseInt(dimensions[1]);
+          const metadata = JSON.parse(stdout);
+          const stream = metadata.streams?.[0];
+          const format = metadata.format;
 
-            // If video is rotated 90° or 270°, swap width and height for Telegram
-            if (rotation === 90 || rotation === 270 || rotation === -90) {
+          if (stream) {
+            let width = stream.width;
+            let height = stream.height;
+            const rotation = parseInt(stream.tags?.rotate || '0');
+
+            // Handle rotation
+            if (Math.abs(rotation) === 90 || Math.abs(rotation) === 270) {
               [width, height] = [height, width];
               logger.info(`Video rotated ${rotation}°, swapping dimensions: ${width}x${height}`);
             }
 
             videoWidth = width;
             videoHeight = height;
-            logger.info(`Sending video dimensions to Telegram: ${videoWidth}x${videoHeight}`);
-          }
 
-          // Get duration separately from format level (more reliable than stream level)
-          const { stdout: durationOut } = await execAsync(
-            `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${actualPath}"`
-          ).catch(() => ({ stdout: '' }));
+            // Get duration (prefer stream duration, fallback to format duration)
+            const duration = stream.duration || format?.duration;
+            if (duration) {
+              videoDuration = Math.round(parseFloat(duration));
+            }
 
-          const parsedDuration = Math.round(parseFloat(durationOut.trim()));
-          if (!isNaN(parsedDuration) && parsedDuration > 0) {
-            videoDuration = parsedDuration;
-            logger.info(`Detected video duration: ${videoDuration}s`);
+            logger.info(`Detected video metadata: ${videoWidth}x${videoHeight}, ${videoDuration}s`);
           }
         } catch (err: any) {
           logger.warn(`Could not detect video metadata: ${err.message || err}`);

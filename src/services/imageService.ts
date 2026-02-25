@@ -7,6 +7,14 @@ import path from 'path';
 
 const execAsync = promisify(exec);
 
+// Safety wrapper for execAsync to prevent OOM and hanging processes
+async function safeExec(command: string, timeoutMs = 30000): Promise<{ stdout: string; stderr: string }> {
+  return execAsync(command, {
+    timeout: timeoutMs,
+    maxBuffer: 1024 * 1024, // 1MB limit for stdout/stderr to prevent OOM
+  });
+}
+
 export interface DownloadedMedia {
   path: string;
   type: 'photo' | 'video';
@@ -116,9 +124,9 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
           const resolutionUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
 
           logger.info(`Attempting Tier 1 resolution (local curl): ${url}`);
-          const { stdout } = await execAsync(
+          const { stdout } = await safeExec(
             `curl -sL -o /dev/null -w "%{url_effective}" -A "${resolutionUA}" "${url}"`,
-            { timeout: 15000 }
+            15000
           );
 
           if (stdout.trim() && !stdout.includes('/login') && stdout.trim() !== url) {
@@ -147,7 +155,7 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
           try {
             // Tier 2: Proxy Fallback via codetabs.com (Direct HTML)
             const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
-            const { stdout } = await execAsync(`curl -sL "${proxyUrl}"`, { timeout: 20000 });
+            const { stdout } = await safeExec(`curl -sL "${proxyUrl}"`, 20000);
             content = stdout;
           } catch (proxyError: any) {
             logger.warn(`Tier 2 (Codetabs) failed: ${proxyError.message}. Attempting Tier 3 (AllOrigins)...`);
@@ -155,7 +163,7 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
             try {
               // Tier 3: Proxy Fallback via allorigins.win
               const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-              const { stdout: proxyJson } = await execAsync(`curl -s "${proxyUrl}"`, { timeout: 20000 });
+              const { stdout: proxyJson } = await safeExec(`curl -s "${proxyUrl}"`, 20000);
               if (proxyJson && proxyJson.startsWith('{')) {
                 const proxyData = JSON.parse(proxyJson);
                 content = proxyData.contents || '';
@@ -669,118 +677,32 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
  */
 export async function isAlbum(url: string): Promise<boolean> {
   try {
+    // Quick regex checks first to avoid spawning processes
+    if (url.includes('tiktok.com')) {
+      if (url.includes('/photo/')) return true;
+      if (url.includes('/video/')) return false;
+    }
+
     // Instagram detection
     if (url.includes('instagram.com')) {
       if (url.includes('/reel/') || url.includes('/reels/') || url.includes('/tv/')) {
-        logger.info('Detected Instagram Video (Reel/TV), will use old logic (yt-dlp)');
         return false;
       }
-      const shortcode = getInstagramShortcode(url);
-      if (shortcode) {
-        logger.info('Detected Instagram post/album, will attempt album download');
-        return true;
-      }
-      return false;
+      return !!getInstagramShortcode(url);
     }
 
     // Facebook detection
     if (url.includes('facebook.com') || url.includes('fb.com')) {
-      // Exclude known video patterns including share links for reels/videos
       if (
         url.includes('/watch') ||
         url.includes('/reel/') ||
         url.includes('/reels/') ||
         url.includes('fb.watch')
       ) {
-        logger.info('Detected Facebook video (watch/reel), will use yt-dlp');
         return false;
       }
 
-
-
-      // For /share/ links (p, r, or generic), we need to check if it's a video or photo
-      if (url.includes('/share/')) {
-        try {
-          // Tier 1: Quick probe with yt-dlp to see if it's a video
-          const cookiesArg = config.cookiesPath ? `--cookies "${config.cookiesPath}"` : '';
-          const { stdout } = await execAsync(
-            `"${config.ytDlpPath}" "${url}" --print "%(ext)s" --no-warnings --no-check-certificates ${cookiesArg} 2>&1`,
-            { timeout: 10000 }
-          );
-          const ext = stdout.trim().toLowerCase();
-
-          // If it's a video format, use yt-dlp
-          if (['mp4', 'webm', 'mkv', 'm4v'].includes(ext)) {
-            logger.info('Detected Facebook video (share/p), will use yt-dlp');
-            return false;
-          }
-
-          // Otherwise it's likely a photo/album
-          logger.info('Detected Facebook photo/album (share/p), will attempt image download');
-          return true;
-        } catch {
-          logger.info('Facebook share/p probe failed, attempting proxy resolution for accurate detection');
-
-          try {
-            // Tier 1.5: Resolve the URL first to get the best one for Embed Plugin
-            const resolutionUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
-            const { stdout: resUrl } = await execAsync(`curl -sL -o /dev/null -w "%{url_effective}" -A "${resolutionUA}" "${url}"`, { timeout: 10000 });
-            let bestUrl = (resUrl && !resUrl.includes('/login')) ? resUrl.trim() : url;
-
-            // Tier 2: Proxy Fallback via codetabs to check meta tags
-            const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(bestUrl)}`;
-            const { stdout: content } = await execAsync(`curl -sL "${proxyUrl}"`, { timeout: 30000 });
-
-            if (content.includes('og:video') || content.includes('\"video_id\":\"')) {
-              logger.info('Detected Facebook video (share/p) via proxy content');
-              return false;
-            }
-
-            // Tier 3: Check via Embed Plugin if type still uncertain
-            if (content.includes('Connectez-vous') || content.includes('Log In') || content.length < 10000) {
-              // Try to find the fbid for robust check
-              const fbidMatch = bestUrl.match(/(?:fbid=|photo\.php\?fbid=|photos\/[^/]+\/|posts\/[^\/]+\/|posts\/|pfbid)([a-zA-Z0-9]+)/) || content.match(/\"fbid\":\"(\d+)\"/);
-              const checkFbid = fbidMatch ? fbidMatch[1] : null;
-
-              const pluginUrlForCheck = checkFbid ? `https://www.facebook.com/facebook/posts/${checkFbid}` : bestUrl;
-              const embedUrl = `https://www.facebook.com/plugins/post.php?href=${encodeURIComponent(pluginUrlForCheck)}`;
-              const proxyEmbedUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(embedUrl)}`;
-              const { stdout: embedContent } = await execAsync(`curl -sL "${proxyEmbedUrl}"`, { timeout: 20000 });
-              if (embedContent.includes('swfobject') || embedContent.includes('video_id') || embedContent.includes('\"video_id\"')) {
-                logger.info('Detected Facebook video (share/p) via Embed Plugin');
-                return false;
-              }
-            }
-          } catch (e) {
-            logger.warn('Initial proxy (Codetabs) in isAlbum failed, trying AllOrigins...');
-            try {
-              const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-              const { stdout: proxyJson } = await execAsync(`curl -s "${proxyUrl}"`, { timeout: 30000 });
-              if (proxyJson && proxyJson.startsWith('{')) {
-                const proxyData = JSON.parse(proxyJson);
-                const content = proxyData.contents || '';
-                if (content.includes('og:video') || content.includes('\"video_id\":\"')) {
-                  logger.info('Detected Facebook video (share/p) via AllOrigins proxy');
-                  return false;
-                }
-              }
-            } catch (ae) {
-              logger.error('All proxy resolution fallbacks in isAlbum failed');
-            }
-          }
-
-          // Final Fallback: If we couldn't resolve/probe AND it's a v/r link, be optimistic
-          // and assume it might be a hybrid album (like share/v/ posts with photos).
-          if (url.includes('/share/v/') || url.includes('/share/r/')) {
-            logger.info('Uncertain /share/v or /share/r link, assuming album/hybrid first');
-            return true;
-          }
-
-          return true;
-        }
-      }
-
-      // Include photo/album/post patterns
+      // Explicit photo/post patterns
       if (
         url.includes('photo.php') ||
         url.includes('permalink.php') ||
@@ -788,65 +710,34 @@ export async function isAlbum(url: string): Promise<boolean> {
         url.includes('/posts/') ||
         url.includes('/story.php')
       ) {
-        logger.info('Detected Facebook photo/album/post, will attempt image download');
-        return true;
-      }
-    }
-
-    // TikTok detection - only treat as album if it's an actual photo carousel
-    if (url.includes('tiktok.com')) {
-      // If URL contains /photo/, it's definitely a photo carousel
-      if (url.includes('/photo/')) {
-        logger.info('Detected TikTok photo carousel (URL contains /photo/)');
         return true;
       }
 
-      try {
-        const galleryDlPath = config.galleryDlPath;
-        const { stdout, stderr } = await execAsync(`${galleryDlPath} \"${url}\" --get-urls 2>&1`, { timeout: 10000 });
-        const output = (stdout + (stderr || '')).toLowerCase();
-        const urls = stdout.trim().split('\n').filter(line => line.startsWith('http'));
-
-        // Check if output contains '/photo/' (indicates photo carousel after redirect)
-        if (output.includes('/photo/')) {
-          logger.info('Detected TikTok photo carousel (gallery-dl output contains /photo/)');
-          return true;
+      // For share links, we might need a quick probe
+      if (url.includes('/share/')) {
+        try {
+          const { stdout } = await safeExec(
+            `"${config.ytDlpPath}" "${url}" --print "%(ext)s" --no-warnings --no-check-certificates 2>&1`,
+            8000
+          );
+          const ext = stdout.trim().toLowerCase();
+          return !['mp4', 'webm', 'mkv', 'm4v'].includes(ext);
+        } catch {
+          // If probe fails, assume it's a photo/album to be safe
+          // (v/r share links are often hybrid)
+          return url.includes('/share/v/') || url.includes('/share/r/');
         }
-
-        // Only treat as album if there are MULTIPLE image URLs (photo carousel)
-        // Single video URLs should use yt-dlp for proper aspect ratio
-        if (urls.length > 1) {
-          logger.info('Detected TikTok photo carousel (multiple images)');
-          return true;
-        }
-
-        // Single URL = regular video, use yt-dlp
-        logger.info('Detected TikTok video (single item), will use yt-dlp');
-        return false;
-      } catch {
-        return false;
       }
+      return true;
     }
 
-    // General detection via yt-dlp
-    const { stdout: playlistCheck } = await execAsync(
+    // General fallback for unknown patterns - only probe if we have to
+    const { stdout: playlistCheck } = await safeExec(
       `"${config.ytDlpPath}" "${url}" --flat-playlist --print "%(playlist_count)s" --no-warnings 2>&1`,
-      { timeout: 10000 }
-    ).catch(() => ({ stdout: '' }));
+      8000
+    ).catch(() => ({ stdout: '1' }));
 
-    if (parseInt(playlistCheck.trim()) > 1) return true;
-
-    try {
-      const result = await execAsync(`"${config.ytDlpPath}" "${url}" --print "%(ext)s" 2>&1`, { timeout: 10000 });
-      const output = (result.stdout + (result.stderr || '')).toLowerCase();
-      if (output.includes('no video') || output.includes('there is no video')) return true;
-
-      const ext = result.stdout.trim().toLowerCase();
-      return ['jpg', 'jpeg', 'png', 'webp'].includes(ext);
-    } catch (error: any) {
-      const errorMsg = (error.message || '' + error.stdout || '' + error.stderr || '').toLowerCase();
-      return errorMsg.includes('no video') || errorMsg.includes('there is no video');
-    }
+    return parseInt(playlistCheck.trim()) > 1;
   } catch {
     return false;
   }

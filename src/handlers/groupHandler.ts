@@ -1,6 +1,6 @@
 import { Context } from 'telegraf';
 import { Update } from 'telegraf/types';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { DownloadJob, JobStatus } from '../types/index.js';
 import { extractUrls, isVideoUrl, normalizeUrl, detectPlatform } from '../utils/urlDetector.js';
 import { queueService } from '../services/queueService.js';
@@ -36,7 +36,7 @@ export async function handleGroupMessage(ctx: Context<Update.MessageUpdate>): Pr
     }
 
     // Create download job
-    const jobId = uuidv4();
+    const jobId = randomUUID();
     const job: DownloadJob = {
       id: jobId,
       url: normalizedUrl,
