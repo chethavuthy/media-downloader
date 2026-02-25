@@ -250,9 +250,10 @@ export function setupJobProcessor(telegram: Telegram): void {
 
       const caption = getRandomCompletionPhrase();
 
-      // Get video dimensions for Telegram (accounting for rotation metadata)
+      // Get video metadata for Telegram (dimensions and duration)
       let videoWidth: number | undefined;
       let videoHeight: number | undefined;
+      let videoDuration: number | undefined;
 
       if (!isPhoto) {
         try {
@@ -287,8 +288,19 @@ export function setupJobProcessor(telegram: Telegram): void {
             videoHeight = height;
             logger.info(`Sending video dimensions to Telegram: ${videoWidth}x${videoHeight}`);
           }
+
+          // Get duration separately from format level (more reliable than stream level)
+          const { stdout: durationOut } = await execAsync(
+            `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${actualPath}"`
+          ).catch(() => ({ stdout: '' }));
+
+          const parsedDuration = Math.round(parseFloat(durationOut.trim()));
+          if (!isNaN(parsedDuration) && parsedDuration > 0) {
+            videoDuration = parsedDuration;
+            logger.info(`Detected video duration: ${videoDuration}s`);
+          }
         } catch (err: any) {
-          logger.warn(`Could not detect video dimensions: ${err.message || err}`);
+          logger.warn(`Could not detect video metadata: ${err.message || err}`);
         }
       }
 
@@ -314,6 +326,7 @@ export function setupJobProcessor(telegram: Telegram): void {
               supports_streaming: true,
               width: videoWidth,
               height: videoHeight,
+              duration: videoDuration,
             });
           }
           uploadSuccess = true;

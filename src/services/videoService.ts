@@ -51,6 +51,7 @@ export async function downloadVideo(url: string, outputPath: string): Promise<st
     const isTikTok = platform === Platform.TIKTOK;
     const isDouyin = platform === Platform.DOUYIN;
     const isFacebook = platform === Platform.FACEBOOK;
+    const isYouTube = platform === Platform.YOUTUBE;
 
     // Use specialized Facebook service for better success rate
     // Improved detection for various FB domains (fb.watch, facebok.com, etc.)
@@ -60,26 +61,36 @@ export async function downloadVideo(url: string, outputPath: string): Promise<st
       return await downloadFacebookVideo(url, outputPath);
     }
 
+    const limit = config.maxFileSizeMB;
     const ytdlFlags: any = {
       output: outputPath,
-      format: 'best[ext=mp4]/best',
+      // Try to find a version that fits in the size limit and is compatible with Telegram (avc1)
+      // Priority: AVC MP4 <= 360p (target ~14MB) -> AVC MP4 <= 480p -> any MP4 < limit -> any format < limit -> best AVC MP4 -> best
+      format: `(bestvideo[vcodec^=avc1][ext=mp4][height<=360][filesize<${limit}M]+bestaudio[ext=m4a]/best[vcodec^=avc1][ext=mp4][height<=360][filesize<${limit}M]/bestvideo[vcodec^=avc1][ext=mp4][height<=480][filesize<${limit}M]+bestaudio[ext=m4a]/best[vcodec^=avc1][ext=mp4][height<=480][filesize<${limit}M]/best[vcodec^=avc1][ext=mp4][filesize<${limit}M]/best[filesize<${limit}M]/best)`,
       noWarnings: true,
       noCheckCertificates: true,
       preferFreeFormats: true,
-      userAgent: isDouyin
-        ? 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+      userAgent: (isDouyin || isYouTube)
+        ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
         : (isTikTok
           ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
           : 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'),
-      maxFilesize: `${config.maxFileSizeMB}M`,
+      maxFilesize: `${limit}M`,
       socketTimeout: config.downloadTimeoutSeconds,
+      // Force MP4 container so faststart works (MKV doesn't support it)
+      mergeOutputFormat: 'mp4',
+      // Ensure video is seekable on Telegram by moving metadata to start of file
+      postprocessorArgs: 'ffmpeg:-movflags +faststart'
     };
 
     // Add cookies if available
     if (config.cookiesPath) {
       ytdlFlags.cookies = config.cookiesPath;
     } else {
-      ytdlFlags.cookiesFromBrowser = 'chrome';
+      // Use cookies from browser as a fallback for YouTube/TikTok
+      if (isYouTube || isTikTok) {
+        ytdlFlags.cookiesFromBrowser = 'chrome';
+      }
     }
 
     await ytDlp(url, ytdlFlags);
