@@ -47,16 +47,15 @@ export async function handleMessage(ctx: Context<Update.MessageUpdate>): Promise
       return;
     }
 
-    // Check rate limit ONLY for actual downloads
-    const { checkRateLimit, recordRequest } = await import('../services/rateLimitService.js');
-    if (!checkRateLimit(userId)) {
+    // Atomically check rate limit and record the request in one step.
+    // Using a single operation prevents the TOCTOU race condition where two
+    // concurrent requests could both pass the check before either is recorded.
+    const { checkAndRecordRequest } = await import('../services/rateLimitService.js');
+    if (!checkAndRecordRequest(userId)) {
       logger.warn(`Rate limit exceeded for user ${userId}`);
       await ctx.reply(getText(userId, 'rateLimitExceeded'));
       return;
     }
-
-    // Record this download request
-    recordRequest(userId);
 
     // Create download job
     const jobId = uuidv4();
