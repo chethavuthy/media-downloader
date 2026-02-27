@@ -9,6 +9,12 @@ import { logger } from './utils/logger.js';
 import http from 'http';
 import dns from 'dns';
 
+// Reconfigure the logger with the LOG_LEVEL value from the parsed config.
+// config/index.ts calls dotenv.config() at import time, so by the time this
+// line executes the env is fully loaded. Without this call, logger.ts reads
+// process.env.LOG_LEVEL before dotenv runs and silently falls back to 'info'.
+logger.setLevel(config.logLevel);
+
 async function main() {
   logger.info('Starting Telegram Video Downloader Bot...');
 
