@@ -27,7 +27,6 @@ export async function getVideoInfo(url: string): Promise<VideoInfo> {
     const info = await ytDlp(url, {
       dumpSingleJson: true,
       noWarnings: true,
-      noCheckCertificates: true,
       preferFreeFormats: true,
     }) as any;
 
@@ -68,7 +67,6 @@ export async function downloadVideo(url: string, outputPath: string): Promise<st
       // Priority: AVC MP4 <= 360p (target ~14MB) -> AVC MP4 <= 480p -> any MP4 < limit -> any format < limit -> best AVC MP4 -> best
       format: `(bestvideo[vcodec^=avc1][ext=mp4][height<=360][filesize<${limit}M]+bestaudio[ext=m4a]/best[vcodec^=avc1][ext=mp4][height<=360][filesize<${limit}M]/bestvideo[vcodec^=avc1][ext=mp4][height<=480][filesize<${limit}M]+bestaudio[ext=m4a]/best[vcodec^=avc1][ext=mp4][height<=480][filesize<${limit}M]/best[vcodec^=avc1][ext=mp4][filesize<${limit}M]/best[filesize<${limit}M]/best)`,
       noWarnings: true,
-      noCheckCertificates: true,
       preferFreeFormats: true,
       userAgent: (isDouyin || isYouTube)
         ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'

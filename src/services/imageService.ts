@@ -704,7 +704,7 @@ export async function isAlbum(url: string): Promise<boolean> {
           // Tier 1: Quick probe with yt-dlp to see if it's a video
           const cookiesArg = config.cookiesPath ? `--cookies "${config.cookiesPath}"` : '';
           const { stdout } = await execAsync(
-            `"${config.ytDlpPath}" "${url}" --print "%(ext)s" --no-warnings --no-check-certificates ${cookiesArg} 2>&1`,
+            `"${config.ytDlpPath}" "${url}" --print "%(ext)s" --no-warnings ${cookiesArg} 2>&1`,
             { timeout: 10000 }
           );
           const ext = stdout.trim().toLowerCase();
