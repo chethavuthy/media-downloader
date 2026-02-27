@@ -1,10 +1,17 @@
 type LogLevel = 'info' | 'warn' | 'error';
 
-class Logger {
+const LEVELS: LogLevel[] = ['info', 'warn', 'error'];
+
+export class Logger {
   private logLevel: LogLevel;
 
   constructor(logLevel: string = 'info') {
-    this.logLevel = logLevel as LogLevel;
+    this.logLevel = (LEVELS.includes(logLevel as LogLevel) ? logLevel : 'info') as LogLevel;
+  }
+
+  /** Update the log level at runtime (used after dotenv has been loaded). */
+  setLevel(logLevel: string): void {
+    this.logLevel = (LEVELS.includes(logLevel as LogLevel) ? logLevel : 'info') as LogLevel;
   }
 
   private formatMessage(level: string, message: string): string {
@@ -35,11 +42,13 @@ class Logger {
   }
 
   private shouldLog(level: LogLevel): boolean {
-    const levels: LogLevel[] = ['info', 'warn', 'error'];
-    const currentLevelIndex = levels.indexOf(this.logLevel);
-    const messageLevelIndex = levels.indexOf(level);
+    const currentLevelIndex = LEVELS.indexOf(this.logLevel);
+    const messageLevelIndex = LEVELS.indexOf(level);
     return messageLevelIndex >= currentLevelIndex;
   }
 }
 
-export const logger = new Logger(process.env.LOG_LEVEL);
+// The logger is created with a default level of 'info'. It is reconfigured
+// at startup in index.ts (after dotenv has been loaded) via logger.setLevel().
+// This prevents LOG_LEVEL being silently ignored when set in .env.
+export const logger = new Logger('info');
