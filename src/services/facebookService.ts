@@ -188,7 +188,7 @@ export async function downloadFacebookVideo(url: string, outputPath: string): Pr
     logger.info(`Strategy 1: Trying with original URL and cookies (${cookiesArg === `--cookies "${config.cookiesPath}"` ? 'cookies.txt' : 'browser'})`);
 
     await execAsync(
-      `"${config.ytDlpPath}" "${url}" -o "${outputPath}" ${formatFlags} ${cookiesArg} --user-agent "${userAgent}" --no-check-certificates --no-warnings 2>&1`,
+      `"${config.ytDlpPath}" "${url}" -o "${outputPath}" ${formatFlags} ${cookiesArg} --user-agent "${userAgent}" --no-warnings 2>&1`,
       { timeout: 90000 }
     );
 
@@ -208,7 +208,7 @@ export async function downloadFacebookVideo(url: string, outputPath: string): Pr
       const cookiesArg = config.cookiesPath ? `--cookies "${config.cookiesPath}"` : '--cookies-from-browser chrome';
 
       await execAsync(
-        `"${config.ytDlpPath}" "${resolvedUrl}" -o "${outputPath}" ${formatFlags} ${cookiesArg} --user-agent "${userAgent}" --no-check-certificates --no-warnings 2>&1`,
+        `"${config.ytDlpPath}" "${resolvedUrl}" -o "${outputPath}" ${formatFlags} ${cookiesArg} --user-agent "${userAgent}" --no-warnings 2>&1`,
         { timeout: 90000 }
       );
 
@@ -245,7 +245,7 @@ export async function downloadFacebookVideo(url: string, outputPath: string): Pr
     if (videoUrl) {
       const finalPath = outputPath.replace('%(ext)s', 'mp4');
       try {
-        await execAsync(`"${config.ytDlpPath}" "${videoUrl}" -o "${finalPath}" --no-check-certificates --no-warnings --user-agent "${userAgent}"`, { timeout: 120000 });
+        await execAsync(`"${config.ytDlpPath}" "${videoUrl}" -o "${finalPath}" --no-warnings --user-agent "${userAgent}"`, { timeout: 120000 });
       } catch {
         await execAsync(`curl -sL -A "${userAgent}" -o "${finalPath}" '${videoUrl}'`, { timeout: 120000 });
       }
