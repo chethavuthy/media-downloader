@@ -4,6 +4,11 @@ node_modules/
 # Environment
 .env
 
+# Cookies file — NEVER commit real session cookies to version control.
+# Generate locally with: yt-dlp --cookies-from-browser chrome --cookies cookies.txt <url>
+# Or set COOKIES_PATH env var to point to a path outside the repo.
+cookies.txt
+
 # Build output
 dist/
 
