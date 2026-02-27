@@ -1,8 +1,15 @@
 import { Context } from 'telegraf';
 import { VideoDownloadError } from '../services/videoService.js';
-import { getText } from '../locales/index.js';
+import { getText, LocaleKey } from '../locales/index.js';
 import { logger } from '../utils/logger.js';
+import { getRandomFailedReaction, FAILED_REACTION } from '../utils/reactions.js';
 
+/**
+ * Handle a download error in a Telegraf context (used for private-chat
+ * errors where a full ctx is available). For job-queue errors (where only
+ * the raw Telegram API client is available), see the catch block in
+ * messageHandler.setupJobProcessor.
+ */
 export async function handleError(ctx: Context, error: Error): Promise<void> {
   const userId = ctx.from?.id;
 
@@ -12,33 +19,26 @@ export async function handleError(ctx: Context, error: Error): Promise<void> {
 
   logger.error(`Error for user ${userId}`, error);
 
-  let messageKey: any = 'downloadFailed';
+  const errorCodeToKey: Partial<Record<string, LocaleKey>> = {
+    PRIVATE: 'privateVideo',
+    GEO_RESTRICTED: 'geoRestricted',
+    UNSUPPORTED: 'unsupportedPlatform',
+    TIMEOUT: 'timeout',
+  };
 
-  if (error instanceof VideoDownloadError) {
-    switch (error.code) {
-      case 'PRIVATE':
-        messageKey = 'privateVideo';
-        break;
-      case 'GEO_RESTRICTED':
-        messageKey = 'geoRestricted';
-        break;
-      case 'UNSUPPORTED':
-        messageKey = 'unsupportedPlatform';
-        break;
-      case 'TIMEOUT':
-        messageKey = 'timeout';
-        break;
-      default:
-        messageKey = 'downloadFailed';
-    }
+  let messageKey: LocaleKey = 'downloadFailed';
+
+  if (error instanceof VideoDownloadError && error.code in errorCodeToKey) {
+    messageKey = errorCodeToKey[error.code] as LocaleKey;
   }
 
   try {
     if (messageKey === 'downloadFailed') {
-      const { getRandomFailedReaction } = await import('../utils/reactions.js');
-      const failedReaction = getRandomFailedReaction();
-      await (ctx as any).react([{ type: 'emoji', emoji: failedReaction as any }]).catch(() => { });
-      // Suppress text message for downloadFailed as requested
+      // Use a reaction for generic failures instead of a text message
+      const failedReaction: string = getRandomFailedReaction() ?? FAILED_REACTION;
+      await (ctx as Context & { react: (r: unknown) => Promise<void> })
+        .react([{ type: 'emoji', emoji: failedReaction }])
+        .catch(() => { /* reactions not available in all chat types */ });
       return;
     }
     await ctx.reply(getText(userId, messageKey));
