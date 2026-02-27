@@ -9,6 +9,7 @@ import { createTempPath, getActualFilePath, validateFileSize, cleanup } from '..
 import { getText } from '../locales/index.js';
 import { logger } from '../utils/logger.js';
 import { Telegram } from 'telegraf';
+import { spawnAsync } from '../utils/spawnAsync.js';
 
 import { getRandomReaction, getRandomFailedReaction } from '../utils/reactions.js';
 import { getRandomCompletionPhrase } from '../utils/phrases.js';
@@ -257,23 +258,23 @@ export function setupJobProcessor(telegram: Telegram): void {
 
       if (!isPhoto) {
         try {
-          const { exec } = await import('child_process');
-          const { promisify } = await import('util');
-          const execAsync = promisify(exec);
-
-          // Get rotation metadata
-          const { stdout: rotationCheck } = await execAsync(
-            `ffprobe -v error -select_streams v:0 -show_entries stream_tags=rotate -of default=nw=1:nk=1 "${actualPath}"`
+          // Get rotation metadata — args as array, no shell interpolation
+          const rotationResult = await spawnAsync(
+            'ffprobe',
+            ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream_tags=rotate',
+              '-of', 'default=nw=1:nk=1', actualPath],
           ).catch(() => ({ stdout: '' }));
 
-          const rotation = parseInt(rotationCheck.trim()) || 0;
+          const rotation = parseInt(rotationResult.stdout.trim()) || 0;
 
           // Get video dimensions
-          const { stdout } = await execAsync(
-            `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "${actualPath}"`
+          const dimResult = await spawnAsync(
+            'ffprobe',
+            ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height',
+              '-of', 'csv=s=x:p=0', actualPath],
           );
 
-          const dimensions = stdout.trim().split('x');
+          const dimensions = dimResult.stdout.trim().split('x');
           if (dimensions.length === 2) {
             let width = parseInt(dimensions[0]);
             let height = parseInt(dimensions[1]);
@@ -289,12 +290,14 @@ export function setupJobProcessor(telegram: Telegram): void {
             logger.info(`Sending video dimensions to Telegram: ${videoWidth}x${videoHeight}`);
           }
 
-          // Get duration separately from format level (more reliable than stream level)
-          const { stdout: durationOut } = await execAsync(
-            `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${actualPath}"`
+          // Get duration from format level (more reliable than stream level)
+          const durResult = await spawnAsync(
+            'ffprobe',
+            ['-v', 'error', '-show_entries', 'format=duration',
+              '-of', 'default=noprint_wrappers=1:nokey=1', actualPath],
           ).catch(() => ({ stdout: '' }));
 
-          const parsedDuration = Math.round(parseFloat(durationOut.trim()));
+          const parsedDuration = Math.round(parseFloat(durResult.stdout.trim()));
           if (!isNaN(parsedDuration) && parsedDuration > 0) {
             videoDuration = parsedDuration;
             logger.info(`Detected video duration: ${videoDuration}s`);
