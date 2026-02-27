@@ -5,6 +5,7 @@ import { handleStart } from './handlers/startHandler.js';
 import { handleMessage, setupJobProcessor } from './handlers/messageHandler.js';
 import { handleGroupMessage } from './handlers/groupHandler.js';
 import { scheduleCleanup } from './services/fileService.js';
+import { rateLimitMiddleware } from './middleware/rateLimitMiddleware.js';
 import { logger } from './utils/logger.js';
 import http from 'http';
 import dns from 'dns';
@@ -47,7 +48,12 @@ async function main() {
   // Register handlers
   bot.command('start', handleStart);
 
-  // Message handlers (rate limiting applied per download, not per message)
+  // Apply rate limiting middleware to all message events.
+  // This is the single authoritative rate-limit gate — the duplicate
+  // inline check has been removed from messageHandler.
+  bot.use(rateLimitMiddleware);
+
+  // Message handlers
   bot.on([message('text'), message('caption')], async (ctx) => {
     const text = 'text' in ctx.message ? ctx.message.text : ('caption' in ctx.message ? ctx.message.caption : '');
 

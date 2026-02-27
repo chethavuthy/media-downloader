@@ -13,6 +13,8 @@ import { Telegram } from 'telegraf';
 import { getRandomReaction, getRandomFailedReaction } from '../utils/reactions.js';
 import { getRandomCompletionPhrase } from '../utils/phrases.js';
 import { downloadAlbum, isAlbum } from '../services/imageService.js';
+import { VideoDownloadError } from '../services/videoService.js';
+import { LocaleKey } from '../locales/index.js';
 
 export async function handleMessage(ctx: Context<Update.MessageUpdate>): Promise<void> {
   const userId = ctx.from?.id;
@@ -47,16 +49,8 @@ export async function handleMessage(ctx: Context<Update.MessageUpdate>): Promise
       return;
     }
 
-    // Check rate limit ONLY for actual downloads
-    const { checkRateLimit, recordRequest } = await import('../services/rateLimitService.js');
-    if (!checkRateLimit(userId)) {
-      logger.warn(`Rate limit exceeded for user ${userId}`);
-      await ctx.reply(getText(userId, 'rateLimitExceeded'));
-      return;
-    }
-
-    // Record this download request
-    recordRequest(userId);
+    // Rate limiting is enforced by rateLimitMiddleware registered in index.ts.
+    // No duplicate check needed here.
 
     // Create download job
     const jobId = uuidv4();
@@ -358,18 +352,29 @@ export function setupJobProcessor(telegram: Telegram): void {
     } catch (error) {
       logger.error(`Job processing failed: ${job.id}`, error as Error);
 
-      // Send error message
       try {
-        // Apply failed reaction instead of text message
-        const failedReaction = getRandomFailedReaction();
-        await telegram.setMessageReaction(job.chatId, job.messageId, [
-          { type: 'emoji', emoji: failedReaction as any }
-        ]).catch(() => { });
-
-        // Suppress text message as requested
-        // await telegram.sendMessage(job.chatId, getText(job.userId, 'downloadFailed'));
+        if (error instanceof VideoDownloadError && error.code !== 'UNKNOWN') {
+          // For typed errors (private, geo-restricted, unsupported, timeout)
+          // send an informative text message to the user
+          const errorCodeToKey: Record<string, LocaleKey> = {
+            PRIVATE: 'privateVideo',
+            GEO_RESTRICTED: 'geoRestricted',
+            UNSUPPORTED: 'unsupportedPlatform',
+            TIMEOUT: 'timeout',
+          };
+          const messageKey = errorCodeToKey[error.code] ?? 'downloadFailed';
+          await telegram.sendMessage(job.chatId, getText(job.userId, messageKey), {
+            reply_parameters: { message_id: job.messageId },
+          });
+        } else {
+          // For unknown/generic errors, use a reaction instead of a text message
+          const failedReaction = getRandomFailedReaction();
+          await telegram.setMessageReaction(job.chatId, job.messageId, [
+            { type: 'emoji', emoji: failedReaction as any },
+          ]).catch(() => { /* reaction may not be available in all chats */ });
+        }
       } catch (sendError) {
-        logger.error('Failed to update reaction on failure', sendError as Error);
+        logger.error('Failed to send error feedback to user', sendError as Error);
       }
     } finally {
       clearInterval(actionInterval);

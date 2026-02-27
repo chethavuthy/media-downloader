@@ -13,7 +13,10 @@ export const POPULAR_REACTIONS = [
 
 export const FAILED_REACTIONS = [
   "👎",
-]
+];
+
+/** The single failed-download reaction emoji. */
+export const FAILED_REACTION = "👎";
 
 export function getRandomReaction(): string {
   return POPULAR_REACTIONS[Math.floor(Math.random() * POPULAR_REACTIONS.length)];
