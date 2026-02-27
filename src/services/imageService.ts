@@ -1,11 +1,8 @@
 import { logger } from '../utils/logger.js';
 import { config } from '../config/index.js';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { spawnAsync } from '../utils/spawnAsync.js';
 import fs from 'fs/promises';
 import path from 'path';
-
-const execAsync = promisify(exec);
 
 export interface DownloadedMedia {
   path: string;
@@ -16,7 +13,6 @@ export interface DownloadedMedia {
  * Extract Instagram shortcode from URL
  */
 function getInstagramShortcode(url: string): string | null {
-  // Regex to match shortcode in /p/, /reel/, /reels/, /tv/
   const match = url.match(/instagram\.com\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
   return match ? match[1] : null;
 }
@@ -96,66 +92,67 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
       const shortcode = getInstagramShortcode(url);
       if (!shortcode) throw new Error('Invalid Instagram URL');
 
-      const instaloaderPath = config.instaloaderPath;
-      const cmd = `${instaloaderPath} --no-metadata-json --no-captions --no-compress-json --dirname-pattern="${outputDir}" -- -${shortcode}`;
+      const args = [
+        '--no-metadata-json',
+        '--no-captions',
+        '--no-compress-json',
+        `--dirname-pattern=${outputDir}`,
+        '--',
+        `-${shortcode}`,
+      ];
 
-      logger.info(`Executing instaloader: ${cmd}`);
-      await execAsync(cmd, { timeout: 120000 });
+      logger.info(`Executing instaloader for shortcode: ${shortcode}`);
+      await spawnAsync(config.instaloaderPath, args, { timeout: 120000 });
     }
-    // Facebook: Direct scraping from mbasic.facebook.com (works better than gallery-dl for photos)
+    // Facebook: Direct scraping from mbasic.facebook.com
     else if (url.includes('facebook.com') || url.includes('fb.com')) {
       logger.info('Using mbasic.facebook.com scraping for Facebook photos');
 
       let targetUrl = url;
       let fbid = '';
       let resolvedUrl = '';
-      // Step 1: Follow redirect for share links to get the real post URL
+      const resolutionUA =
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+
+      // Step 1: Follow redirect for share links
       if (url.includes('/share/')) {
         try {
-          // Use a modern browser user agent for resolution to avoid connection resets
-          const resolutionUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
-
           logger.info(`Attempting Tier 1 resolution (local curl): ${url}`);
-          const { stdout } = await execAsync(
-            `curl -sL -o /dev/null -w "%{url_effective}" -A "${resolutionUA}" "${url}"`,
+          const { stdout } = await spawnAsync(
+            'curl',
+            ['-sL', '-o', '/dev/null', '-w', '%{url_effective}', '-A', resolutionUA, url],
             { timeout: 15000 }
           );
 
           if (stdout.trim() && !stdout.includes('/login') && stdout.trim() !== url) {
             targetUrl = stdout.trim();
-            resolvedUrl = targetUrl; // Store the high-quality redirected URL
+            resolvedUrl = targetUrl;
             logger.info(`Resolved share link to: ${targetUrl}`);
 
-            // Extract fbid/story_fbid from resolved URL
             const storyFbidMatch = targetUrl.match(/story_fbid=(\d+)/);
             const fbidParamMatch = targetUrl.match(/fbid=(\d+)/);
-
             if (storyFbidMatch) {
               fbid = storyFbidMatch[1];
             } else if (fbidParamMatch) {
               fbid = fbidParamMatch[1];
             }
           } else {
-            logger.warn(`Tier 1 resolution returned same URL or login wall: ${stdout.trim()}`);
-            throw new Error('Tier 1 resolution failed to resolve');
+            logger.warn(`Tier 1 resolution returned same URL or login wall`);
+            throw new Error('Tier 1 resolution failed');
           }
         } catch (e: any) {
-          logger.warn(`Tier 1 resolution failed: ${e.message}. Attempting Tier 2 (Proxy Fallback via Codetabs)...`);
+          logger.warn(`Tier 1 resolution failed: ${e.message}. Attempting Tier 2 (Proxy via Codetabs)...`);
 
           let content = '';
-
           try {
-            // Tier 2: Proxy Fallback via codetabs.com (Direct HTML)
             const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
-            const { stdout } = await execAsync(`curl -sL "${proxyUrl}"`, { timeout: 20000 });
+            const { stdout } = await spawnAsync('curl', ['-sL', proxyUrl], { timeout: 20000 });
             content = stdout;
           } catch (proxyError: any) {
             logger.warn(`Tier 2 (Codetabs) failed: ${proxyError.message}. Attempting Tier 3 (AllOrigins)...`);
-
             try {
-              // Tier 3: Proxy Fallback via allorigins.win
               const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-              const { stdout: proxyJson } = await execAsync(`curl -s "${proxyUrl}"`, { timeout: 20000 });
+              const { stdout: proxyJson } = await spawnAsync('curl', ['-s', proxyUrl], { timeout: 20000 });
               if (proxyJson && proxyJson.startsWith('{')) {
                 const proxyData = JSON.parse(proxyJson);
                 content = proxyData.contents || '';
@@ -168,42 +165,40 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
           if (content) {
             logger.info('Successfully fetched content via proxy. Extracting IDs...');
 
-            // Priority 1: Check if the resolved URL itself contains the ID (Most reliable)
-            // Support pfbid, share/p, videos, etc.
-            const urlIdMatch = resolvedUrl.match(/(?:fbid=|photo\.php\?fbid=|photos\/[^/]+\/|posts\/[^\/]+\/|posts\/|pfbid|videos\/|share\/p\/|share\/v\/)([a-zA-Z0-9]+)/);
+            const urlIdMatch = resolvedUrl.match(
+              /(?:fbid=|photo\.php\?fbid=|photos\/[^/]+\/|posts\/[^/]+\/|posts\/|pfbid|videos\/|share\/p\/|share\/v\/)([a-zA-Z0-9]+)/
+            );
             if (urlIdMatch) {
               fbid = urlIdMatch[1];
               logger.info(`Extracted ID from resolved URL: ${fbid}`);
             } else {
-              // Only search HTML if URL didn't yield an ID
-              // Search for tell-tale Facebook ID patterns in the HTML
-              // Priority 2: story_fbid
-              const storyFbidMatch = content.match(/\"story_fbid\":\"(\d+)\"/);
-              // Priority 3: fbid in URLs
+              const storyFbidMatch = content.match(/"story_fbid":"(\d+)"/);
               const fbidMatch = content.match(/fbid=(\d+)/);
-              // Also try to find canonical link (highest quality for Embed Plugin)
-              const canonicalMatch = content.match(/link rel=\"canonical\" href=\"([^"]+)\"/);
+              const canonicalMatch =
+                content.match(/link rel="canonical" href="([^"]+)"/) ||
+                content.match(/"og:url" content="([^"]+)"/);
+
               if (canonicalMatch && !canonicalMatch[1].includes('/login')) {
                 const canonicalUrl = canonicalMatch[1];
                 logger.info(`Found canonical URL via proxy: ${canonicalUrl}`);
-
-                // Check if it's a video
-                if (canonicalUrl.includes('/videos/') || canonicalUrl.includes('/reel/') || canonicalUrl.includes('/watch/')) {
+                if (
+                  canonicalUrl.includes('/videos/') ||
+                  canonicalUrl.includes('/reel/') ||
+                  canonicalUrl.includes('/watch/')
+                ) {
                   logger.info('Canonical URL indicates VIDEO. Aborting image download.');
                   return [];
                 }
-
-                // Try to extract ID from canonical
-                const canonicalIdMatch = canonicalUrl.match(/(?:fbid=|photo\.php\?fbid=|photos\/[^/]+\/|posts\/[^\/]+\/|posts\/|pfbid)([a-zA-Z0-9]+)/);
+                const canonicalIdMatch = canonicalUrl.match(
+                  /(?:fbid=|photo\.php\?fbid=|photos\/[^/]+\/|posts\/[^/]+\/|posts\/|pfbid)([a-zA-Z0-9]+)/
+                );
                 if (canonicalIdMatch) {
                   fbid = canonicalIdMatch[1];
                   logger.info(`Extracted ID from canonical URL: ${fbid}`);
                 }
               }
 
-              // Priority 4: any long digit strings (usually IDs) - LAST RESORT
               if (!fbid) {
-                // ... existing generic ID logic ...
                 const genericIdMatches = content.match(/(\d{15,})/g);
                 if (storyFbidMatch) {
                   fbid = storyFbidMatch[1];
@@ -215,8 +210,12 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
               }
             }
 
-            // If the resolved URL or content indicates a VIDEO, abort album processing
-            if (resolvedUrl.includes('/videos/') || resolvedUrl.includes('/reel/') || resolvedUrl.includes('/watch/') || resolvedUrl.includes('share/v/')) {
+            if (
+              resolvedUrl.includes('/videos/') ||
+              resolvedUrl.includes('/reel/') ||
+              resolvedUrl.includes('/watch/') ||
+              resolvedUrl.includes('share/v/')
+            ) {
               logger.info('Resolved URL indicates VIDEO. Aborting image download.');
               return [];
             }
@@ -229,57 +228,54 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
         logger.info(`Reconstructed target URL: ${targetUrl}`);
       }
 
-      // Final check for resolvedUrl: must not be a login page
       if (resolvedUrl && resolvedUrl.includes('/login')) {
-        logger.warn(`Discarding login-bound resolved URL: ${resolvedUrl}`);
+        logger.warn(`Discarding login-bound resolved URL`);
         resolvedUrl = '';
       }
       if (!resolvedUrl) resolvedUrl = targetUrl;
 
-      // Extract fbid from various URL formats if not already found
+      // Extract fbid from URL if not already found
       if (!fbid) {
-        // Updated regex to support alphanumeric IDs (pfbid) and posts path
-        const fbidMatch = targetUrl.match(/(?:fbid=|photo\.php\?fbid=|photos\/[^/]+\/|posts\/[^\/]+\/|posts\/|pfbid)([a-zA-Z0-9]+)/);
-        if (fbidMatch) {
-          fbid = fbidMatch[1];
-        }
+        const fbidMatch = targetUrl.match(
+          /(?:fbid=|photo\.php\?fbid=|photos\/[^/]+\/|posts\/[^/]+\/|posts\/|pfbid)([a-zA-Z0-9]+)/
+        );
+        if (fbidMatch) fbid = fbidMatch[1];
       }
 
-      // Step 2: Try mbasic.facebook.com scraping (primary method for photos)
+      // Step 2: mbasic.facebook.com scraping
       if (fbid) {
         logger.info(`Extracted Facebook photo ID: ${fbid}`);
 
         try {
-          // Construct URL: use /posts/ for pfbid or post IDs, /photo.php for numeric photo IDs
-          // Use /posts/ if it looks like a pfbid or if we extracted it from a /posts/ URL
-          const mbasicUrl = (fbid.startsWith('pfbid') || targetUrl.includes('/posts/'))
-            ? `https://mbasic.facebook.com/posts/${fbid}`
-            : `https://mbasic.facebook.com/photo.php?fbid=${fbid}`;
+          const mbasicUrl =
+            fbid.startsWith('pfbid') || targetUrl.includes('/posts/')
+              ? `https://mbasic.facebook.com/posts/${fbid}`
+              : `https://mbasic.facebook.com/photo.php?fbid=${fbid}`;
 
           logger.info(`Attempting mbasic scraping: ${mbasicUrl}`);
           let stdout = '';
-          const modernUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
+          const modernUA =
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
           const botUA = 'Googlebot/2.1 (+http://www.google.com/bot.html)';
 
           try {
-            // Tier 1: Local scraping (NO COOKIES to avoid session block)
-            const { stdout: localStdout } = await execAsync(
-              `curl -sL -A "${modernUA}" "${mbasicUrl}"`,
+            const result = await spawnAsync(
+              'curl',
+              ['-sL', '-A', modernUA, mbasicUrl],
               { timeout: 30000, maxBuffer: 10 * 1024 * 1024 }
             );
-            stdout = localStdout;
+            stdout = result.stdout;
           } catch (localError: any) {
-            logger.warn(`mbasic local scraping failed: ${localError.message}. Attempting Tier 2 proxy (Modern UA)...`);
+            logger.warn(`mbasic local scraping failed: ${localError.message}. Attempting Tier 2 proxy...`);
             try {
-              // Tier 2: Proxy scraping (Modern UA)
               const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(mbasicUrl)}`;
-              const { stdout: proxyStdout } = await execAsync(`curl -sL -A "${modernUA}" "${proxyUrl}"`, { timeout: 30000 });
-              stdout = proxyStdout;
+              const proxyResult = await spawnAsync('curl', ['-sL', '-A', modernUA, proxyUrl], { timeout: 30000 });
+              stdout = proxyResult.stdout;
 
               if (stdout.includes('Connectez-vous') || stdout.includes('Log In') || stdout.length < 10000) {
-                logger.warn('Tier 2 returned login wall or small content. Attempting Tier 3 proxy (Bot UA)...');
-                const { stdout: botStdout } = await execAsync(`curl -sL -A "${botUA}" "${proxyUrl}"`, { timeout: 30000 });
-                stdout = botStdout;
+                logger.warn('Tier 2 returned login wall. Attempting Tier 3 (Bot UA)...');
+                const botResult = await spawnAsync('curl', ['-sL', '-A', botUA, proxyUrl], { timeout: 30000 });
+                stdout = botResult.stdout;
               }
             } catch (proxyError: any) {
               logger.error(`Proxy scraping failed: ${proxyError.message}`);
@@ -292,10 +288,11 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
             logger.info(`mbasic scraping returned ${stdout.length} bytes`);
           }
 
-          // Initial extraction from mbasic content
           const extractImages = (content: string) => {
             const matches = content.match(/(?:scontent|fbcdn\.net)[^\s"<>']+/g) || [];
-            let ogMatch = content.match(/property="og:image" content="([^"]+)"/) || content.match(/"og:image" content="([^"]+)"/);
+            const ogMatch =
+              content.match(/property="og:image" content="([^"]+)"/) ||
+              content.match(/"og:image" content="([^"]+)"/);
 
             let urls = matches
               .map(u => {
@@ -306,8 +303,20 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
               .filter(u => {
                 const hasDomain = u.includes('scontent') || u.includes('fbcdn.net');
                 const lowerUrl = u.toLowerCase();
-                const hasExt = lowerUrl.includes('.jpg') || lowerUrl.includes('.jpeg') || lowerUrl.includes('.png') || lowerUrl.includes('.kf') || lowerUrl.includes('_nc_');
-                const isStatic = u.includes('rsrc.php') || u.includes('emoji.php') || u.includes('/catalog/') || u.includes('ad_') || lowerUrl.includes('t15.') || lowerUrl.includes('/t15/') || lowerUrl.includes('t16.');
+                const hasExt =
+                  lowerUrl.includes('.jpg') ||
+                  lowerUrl.includes('.jpeg') ||
+                  lowerUrl.includes('.png') ||
+                  lowerUrl.includes('.kf') ||
+                  lowerUrl.includes('_nc_');
+                const isStatic =
+                  u.includes('rsrc.php') ||
+                  u.includes('emoji.php') ||
+                  u.includes('/catalog/') ||
+                  u.includes('ad_') ||
+                  lowerUrl.includes('t15.') ||
+                  lowerUrl.includes('/t15/') ||
+                  lowerUrl.includes('t16.');
                 return hasDomain && hasExt && !isStatic;
               });
 
@@ -320,24 +329,28 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
           let imageUrls = extractImages(stdout);
           logger.info(`Initial mbasic sweep found ${imageUrls.length} image URLs`);
 
-          // Tier 4: Embed Plugin Fallback (Trigger if no images OR login wall)
-          const isLoginWall = stdout.includes('Connectez-vous') || stdout.includes('Log In') || (stdout.length > 0 && stdout.length < 5000);
+          const isLoginWall =
+            stdout.includes('Connectez-vous') ||
+            stdout.includes('Log In') ||
+            (stdout.length > 0 && stdout.length < 5000);
 
           if (imageUrls.length === 0 || isLoginWall) {
             logger.info(`mbasic failed (URLs: ${imageUrls.length}, LoginWall: ${isLoginWall}). Attempting Tier 4 (Embed Plugin)...`);
             try {
-              const pluginHref = fbid ? `https://www.facebook.com/facebook/posts/${fbid}` : (resolvedUrl || targetUrl);
+              const pluginHref = fbid
+                ? `https://www.facebook.com/facebook/posts/${fbid}`
+                : resolvedUrl || targetUrl;
               const embedUrl = `https://www.facebook.com/plugins/post.php?href=${encodeURIComponent(pluginHref)}`;
               const proxyEmbedUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(embedUrl)}`;
-              const { stdout: embedStdout } = await execAsync(`curl -sL -A "${modernUA}" "${proxyEmbedUrl}"`, { timeout: 30000 });
+              const embedResult = await spawnAsync('curl', ['-sL', '-A', modernUA, proxyEmbedUrl], { timeout: 30000 });
 
-              if (embedStdout && embedStdout.length > 1000) {
-                logger.info(`Embed Plugin scraping returned ${embedStdout.length} bytes`);
-                const embedUrls = extractImages(embedStdout);
+              if (embedResult.stdout && embedResult.stdout.length > 1000) {
+                logger.info(`Embed Plugin scraping returned ${embedResult.stdout.length} bytes`);
+                const embedUrls = extractImages(embedResult.stdout);
                 if (embedUrls.length > 0) {
                   logger.info(`Embed Plugin rescued the download with ${embedUrls.length} images!`);
                   imageUrls = embedUrls;
-                  stdout = embedStdout; // Update content for video check
+                  stdout = embedResult.stdout;
                 }
               }
             } catch (embedError: any) {
@@ -345,22 +358,22 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
             }
           }
 
-          // Check if final content indicates video
-          if (stdout.includes('video_id') || stdout.includes('"video_id"') || stdout.includes('swfobject')) {
+          if (
+            stdout.includes('video_id') ||
+            stdout.includes('"video_id"') ||
+            stdout.includes('swfobject')
+          ) {
             logger.info('Content indicates VIDEO. Aborting image download.');
             return [];
           }
 
           logger.info(`mbasic filtered to ${imageUrls.length} valid image URLs`);
 
-          // Group URLs by unique content ID to support albums
           const imageGroups = new Map<string, string[]>();
-
           if (imageUrls.length > 0) {
             imageUrls.forEach(u => {
               const idMatch = u.match(/(\d+)_(\d+)_(\d+)_[a-z]\.jpg/);
               let contentId = 'default';
-
               if (idMatch) {
                 contentId = idMatch[2];
               } else {
@@ -368,30 +381,23 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
                 if (anyNum) contentId = anyNum[1] || 'misc';
                 else contentId = 'og_image';
               }
-
-              if (!imageGroups.has(contentId)) {
-                imageGroups.set(contentId, []);
-              }
+              if (!imageGroups.has(contentId)) imageGroups.set(contentId, []);
               imageGroups.get(contentId)?.push(u);
             });
           }
 
           logger.info(`Found ${imageGroups.size} unique image content groups`);
 
-          // Download the best image from each group
           for (const [contentId, groupUrls] of imageGroups) {
-            // Filter out likely profile pictures/icons if we have varying sizes? 
-            // For now, download everything that looks like a photo
-
-            // Sort by length (descending) to get best resolution
-            // 1. Sort by resolution (parsing dimensions from URL)
             const getDimensions = (u: string) => {
               const match = u.match(/[sp](\d+)x(\d+)/);
               if (match) {
-                return { w: parseInt(match[1]), h: parseInt(match[2]), pixels: parseInt(match[1]) * parseInt(match[2]) };
+                return {
+                  w: parseInt(match[1]),
+                  h: parseInt(match[2]),
+                  pixels: parseInt(match[1]) * parseInt(match[2]),
+                };
               }
-              // If it's a valid FB URL but HAS NO size marker, it's often the original/highest res
-              // Assign it a huge virtual size to prioritize it over thumbnails
               if ((u.includes('scontent') || u.includes('fbcdn')) && !u.includes('s100x100') && !u.includes('p100x100')) {
                 return { w: 9999, h: 9999, pixels: 99999999 };
               }
@@ -401,56 +407,49 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
             const bestUrl = groupUrls.sort((a, b) => {
               const dimA = getDimensions(a);
               const dimB = getDimensions(b);
-
-              // Primary sort: Total pixels
               if (dimA.pixels !== dimB.pixels) return dimB.pixels - dimA.pixels;
-
-              // Secondary sort: URL length (longer often means signed/better)
               return b.length - a.length;
             })[0];
 
             const dims = getDimensions(bestUrl);
-            logger.info(`Best variant for ID ${contentId}: ${dims.w}x${dims.h} (${bestUrl.substring(0, 50)}...)`);
+            logger.info(`Best variant for ID ${contentId}: ${dims.w}x${dims.h}`);
 
-            // 2. Filter out likely profile pictures or tiny thumbnails
-            // Strict check: both dimensions must be significant (e.g. > 200px)
-            // Profile pics are often 50x50, 100x100, 160x160.
-            // Content images are usually > 300px.
             const minDimension = 200;
             if (dims.w > 0 && (dims.w < minDimension || dims.h < minDimension)) {
               logger.info(`Skipping small image (likely profile/thumbnail) ID ${contentId}: ${dims.w}x${dims.h}`);
               continue;
             }
 
-            // Also filter explicitly known small markers just in case regex failed
-            if (bestUrl.includes('cp0_dst_jpg_p50x50') || bestUrl.includes('p50x50') || bestUrl.includes('s50x50')) {
+            if (
+              bestUrl.includes('cp0_dst_jpg_p50x50') ||
+              bestUrl.includes('p50x50') ||
+              bestUrl.includes('s50x50')
+            ) {
               continue;
             }
 
-            // Use the content ID for filename, or fbid_index if generic
-            const uniqueFilename = contentId === 'default' || contentId === 'og_image' ? `${fbid}.jpg` : `${contentId}.jpg`;
+            const uniqueFilename =
+              contentId === 'default' || contentId === 'og_image'
+                ? `${fbid}.jpg`
+                : `${contentId}.jpg`;
             const imagePath = path.join(outputDir, uniqueFilename);
 
             logger.info(`Downloading image (ID: ${contentId}): ${imagePath}`);
-            const minSize = 25000; // Increased to 25KB to be very safe and filter icons/emojis
+            const minSize = 25000;
 
             try {
-              await execAsync(`curl -sL -o "${imagePath}" "${bestUrl}"`, { timeout: 30000 });
-
+              await spawnAsync('curl', ['-sL', '-o', imagePath, bestUrl], { timeout: 30000 });
               const stat = await fs.stat(imagePath);
-              if (stat.size > minSize) {
-                // File is good, scanForMedia will pick it up
-              } else {
-                logger.warn(`Downloaded file too small (${stat.size} bytes), likely thumbnail/error. Removing: ${imagePath}`);
-                await fs.unlink(imagePath).catch(() => { });
+              if (stat.size <= minSize) {
+                logger.warn(`Downloaded file too small (${stat.size} bytes), removing: ${imagePath}`);
+                await fs.unlink(imagePath).catch(() => { /* ignore */ });
               }
             } catch (dlError: any) {
               logger.warn(`Direct image download failed for ${contentId}: ${dlError.message}. Attempting weserv.nl...`);
               const proxyImageUrl = `https://images.weserv.nl/?url=${encodeURIComponent(bestUrl)}`;
               try {
-                await execAsync(`curl -sL -o "${imagePath}" "${proxyImageUrl}"`, { timeout: 30000 });
-                // scanForMedia will pick it up
-              } catch (e) {
+                await spawnAsync('curl', ['-sL', '-o', imagePath, proxyImageUrl], { timeout: 30000 });
+              } catch {
                 logger.error(`Failed to download image ${contentId} via proxy too`);
               }
             }
@@ -460,81 +459,66 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
         }
       }
 
-      // Check if mbasic worked
       let files = await scanForMedia(outputDir);
 
-      // Check for low-resolution results (often caused by Embed Plugin limits on single photos)
       let isLowQuality = false;
       let lowQualityFile: DownloadedMedia | null = null;
 
       if (files.length === 1 && files[0].type === 'photo') {
         try {
           const stats = await fs.stat(files[0].path);
-          // If file is < 40KB, it's likely a 500px preview (usually ~20-30KB).
-          // High res 960px+ is usually > 60KB. 100KB+ is ideal.
           if (stats.size < 40 * 1024) {
-            logger.warn(`Downloaded single image is low quality (${Math.round(stats.size / 1024)}KB). Attempting gallery-dl fallback (keeping original as backup)...`);
+            logger.warn(`Downloaded single image is low quality (${Math.round(stats.size / 1024)}KB). Attempting gallery-dl fallback...`);
             isLowQuality = true;
             lowQualityFile = files[0];
           }
-        } catch (e) { }
+        } catch { /* ignore */ }
       }
 
-      // Step 3: Fallback to gallery-dl if mbasic didn't work OR returned low quality
+      // Step 3: gallery-dl fallback
       if (files.length === 0 || isLowQuality) {
-        if (isLowQuality) logger.info('Retrying with gallery-dl for higher resolution...');
-        else logger.info('mbasic approach detected no media, using gallery-dl fallback...');
+        if (isLowQuality) {
+          logger.info('Retrying with gallery-dl for higher resolution...');
+        } else {
+          logger.info('mbasic approach detected no media, using gallery-dl fallback...');
+        }
 
-        const galleryDlPath = config.galleryDlPath;
-        const cookiesArg = config.cookiesPath
-          ? `--cookies "${config.cookiesPath}"`
-          : '--cookies-from-browser chrome';
+        const galleryDlArgs = [targetUrl, '--dest', outputDir, '--no-mtime', '--write-metadata', '--range', '1'];
+        if (config.cookiesPath) {
+          galleryDlArgs.push('--cookies', config.cookiesPath);
+        }
 
         try {
-          await execAsync(
-            `${galleryDlPath} "${targetUrl}" --dest "${outputDir}" ${cookiesArg} --no-mtime --write-metadata --range 1`,
-            { timeout: 60000 }
-          );
+          await spawnAsync(config.galleryDlPath, galleryDlArgs, { timeout: 60000 });
         } catch (e: any) {
           logger.warn(`gallery-dl fallback failed: ${e.message}`);
         }
 
-        // Re-scan to see if we got anything better
         const newFiles = await scanForMedia(outputDir);
-
-        // Smart merge logic:
-        // 1. If gallery-dl worked and gave us a better file, great.
-        // 2. If it failed, we fall back to our 'lowQualityFile' (if we had one).
         if (newFiles.length > 0) {
-          // Check if we just have the same old file or a new one
           if (isLowQuality && lowQualityFile && newFiles.length === 1 && newFiles[0].path === lowQualityFile.path) {
-            // It's the same file, gallery-dl likely failed or didn't overwrite
             logger.warn('Gallery-dl did not improve quality. Returning original/low-res version.');
           } else if (isLowQuality) {
             logger.info('Gallery-dl succeeded or added files!');
-            // Clean up the old low res file if it has a different name and still exists?
-            // Usually gallery-dl overwrites if same name, or we just return distinct files.
           }
           files = newFiles;
         } else if (isLowQuality && lowQualityFile) {
-          // Gallery-dl returned NOTHING (e.g. failed completely), but we still have our backup
           logger.warn('Gallery-dl returned no files. Falling back to original low-res download.');
           files = [lowQualityFile];
         }
       }
 
-
-
-      // ADVANCED FALLBACK: Timeline Scan (Now the primary recovery method)
-      // If we only got 1 image but it's a known post format, reconstruction is likely needed.
-      if (files.length === 1 && (targetUrl.includes('/posts/') || targetUrl.includes('fbid=') || targetUrl.includes('permalink.php') || targetUrl.includes('/photos/') || targetUrl.includes('/share/p/'))) {
-        logger.info('Reconstructing gallery via Timeline Scan (High-Speed Mode)...');
-
+      // ADVANCED FALLBACK: Timeline Scan
+      if (
+        files.length === 1 &&
+        (targetUrl.includes('/posts/') ||
+          targetUrl.includes('fbid=') ||
+          targetUrl.includes('permalink.php') ||
+          targetUrl.includes('/photos/') ||
+          targetUrl.includes('/share/p/'))
+      ) {
+        logger.info('Reconstructing gallery via Timeline Scan...');
         try {
-          const galleryDlPath = config.galleryDlPath;
-          const cookiesArg = config.cookiesPath
-            ? `--cookies "${config.cookiesPath}"`
-            : '--cookies-from-browser chrome';
           const absOutputDir = path.resolve(outputDir);
           let metaPath: string | null = null;
 
@@ -550,7 +534,7 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
                   return;
                 }
               }
-            } catch { }
+            } catch { /* ignore */ }
           };
           await findMeta(absOutputDir);
 
@@ -564,19 +548,17 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
               const scanDir = path.join(outputDir, 'timeline_scan');
               await fs.mkdir(scanDir, { recursive: true });
 
-              // range 1-20 is enough for most recent galleries and much faster
               const timelineUrl = `https://www.facebook.com/${userIdentifier}/photos/`;
-              await execAsync(
-                `${galleryDlPath} "${timelineUrl}" --dest "${scanDir}" --range 1-20 ${cookiesArg} --no-mtime --write-metadata`,
-                { timeout: 120000 }
-              );
+              const timelineArgs = [timelineUrl, '--dest', scanDir, '--range', '1-20', '--no-mtime', '--write-metadata'];
+              if (config.cookiesPath) timelineArgs.push('--cookies', config.cookiesPath);
+
+              await spawnAsync(config.galleryDlPath, timelineArgs, { timeout: 120000 });
 
               const scanResults = await scanForMedia(scanDir);
-              logger.info(`Timeline scan found ${scanResults.length} potential images to check.`);
+              logger.info(`Timeline scan found ${scanResults.length} potential images`);
 
-              // Only perform matching if it's a known gallery type (pcb. or title has "post")
-              // This prevents grabbing 50 photos from a "Mobile Uploads" album side-by-side
-              const isGenuineGallery = (metadata.set_id && metadata.set_id.includes('pcb.')) ||
+              const isGenuineGallery =
+                (metadata.set_id && metadata.set_id.includes('pcb.')) ||
                 (metadata.title && metadata.title.toLowerCase().includes('post'));
 
               const matchingFiles: DownloadedMedia[] = [];
@@ -590,9 +572,7 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
                       const itemMeta = JSON.parse(await fs.readFile(itemMetaPath, 'utf-8'));
                       const itemDateStr = itemMeta.upload_date || itemMeta.date;
                       const itemDate = new Date(itemDateStr).getTime();
-
                       const diff = Math.abs(itemDate - baseDate);
-                      // Genuine galleries have very tight timestamps (usually < 30s)
                       if (diff <= 45000) {
                         logger.info(`Matched image ${path.basename(media.path)} (diff: ${diff / 1000}s)`);
                         const newPath = path.join(outputDir, path.basename(media.path));
@@ -605,7 +585,7 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
                   }
                 }
               } else {
-                logger.info('Detected standard album photo (not a gallery post). Skipping reconstruction to avoid over-downloading.');
+                logger.info('Standard album photo — skipping reconstruction.');
               }
 
               if (matchingFiles.length > 1) {
@@ -619,10 +599,10 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
               logger.warn(`Insufficient data for timeline scan: User=${userIdentifier}, Date=${baseDate}`);
             }
           } else {
-            logger.warn('No metadata (.json) found in download directory, skipping timeline scan.');
+            logger.warn('No metadata (.json) found, skipping timeline scan.');
           }
         } catch (scanError: any) {
-          logger.error(`Timeline Scan fallback failed`, scanError);
+          logger.error('Timeline Scan fallback failed', scanError);
         }
       }
 
@@ -631,9 +611,9 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
     // TikTok: Use gallery-dl
     else if (url.includes('tiktok.com')) {
       logger.info('Using gallery-dl for TikTok');
-      const galleryDlPath = config.galleryDlPath;
-      await execAsync(
-        `${galleryDlPath} "${url}" --dest "${outputDir}" --no-mtime`,
+      await spawnAsync(
+        config.galleryDlPath,
+        [url, '--dest', outputDir, '--no-mtime'],
         { timeout: 120000 }
       );
     }
@@ -641,38 +621,40 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
     else {
       logger.info('Using yt-dlp for download');
       const outputTemplate = path.join(outputDir, '%(autonumber)s.%(ext)s');
-      const ytDlpCmd = `"${config.ytDlpPath}" "${url}" -o "${outputTemplate}" --no-warnings`;
-      await execAsync(ytDlpCmd, { timeout: 120000 });
+      await spawnAsync(
+        config.ytDlpPath,
+        [url, '-o', outputTemplate, '--no-warnings'],
+        { timeout: 120000 }
+      );
     }
 
     // Final scan for all platforms
     const finalFiles = await scanForMedia(outputDir);
-
     logger.info(`Downloaded ${finalFiles.length} unique media files`);
 
     if (finalFiles.length === 0) {
-      try { await fs.rm(outputDir, { recursive: true, force: true }); } catch { }
+      try { await fs.rm(outputDir, { recursive: true, force: true }); } catch { /* ignore */ }
       throw new Error('No media files found after download');
     }
 
     return finalFiles;
-
   } catch (error: any) {
     logger.error('Album download failed', error);
-    try { await fs.rm(outputDir, { recursive: true, force: true }); } catch { }
+    try { await fs.rm(outputDir, { recursive: true, force: true }); } catch { /* ignore */ }
     throw new Error(`Failed to download album: ${error.message}`);
   }
 }
 
 /**
- * Check if a URL contains media (images/videos) or is an album/carousel
+ * Check if a URL contains media (images/videos) or is an album/carousel.
+ * All external commands use spawn() with argument arrays — no shell injection.
  */
 export async function isAlbum(url: string): Promise<boolean> {
   try {
     // Instagram detection
     if (url.includes('instagram.com')) {
       if (url.includes('/reel/') || url.includes('/reels/') || url.includes('/tv/')) {
-        logger.info('Detected Instagram Video (Reel/TV), will use old logic (yt-dlp)');
+        logger.info('Detected Instagram Video (Reel/TV), will use yt-dlp');
         return false;
       }
       const shortcode = getInstagramShortcode(url);
@@ -685,7 +667,6 @@ export async function isAlbum(url: string): Promise<boolean> {
 
     // Facebook detection
     if (url.includes('facebook.com') || url.includes('fb.com')) {
-      // Exclude known video patterns including share links for reels/videos
       if (
         url.includes('/watch') ||
         url.includes('/reel/') ||
@@ -696,91 +677,90 @@ export async function isAlbum(url: string): Promise<boolean> {
         return false;
       }
 
-
-
-      // For /share/ links (p, r, or generic), we need to check if it's a video or photo
       if (url.includes('/share/')) {
         try {
-          // Tier 1: Quick probe with yt-dlp to see if it's a video
-          const cookiesArg = config.cookiesPath ? `--cookies "${config.cookiesPath}"` : '';
-          const { stdout } = await execAsync(
-            `"${config.ytDlpPath}" "${url}" --print "%(ext)s" --no-warnings --no-check-certificates ${cookiesArg} 2>&1`,
-            { timeout: 10000 }
-          );
+          const args = [url, '--print', '%(ext)s', '--no-warnings'];
+          if (config.cookiesPath) args.push('--cookies', config.cookiesPath);
+
+          const { stdout } = await spawnAsync(config.ytDlpPath, args, { timeout: 10000 });
           const ext = stdout.trim().toLowerCase();
 
-          // If it's a video format, use yt-dlp
           if (['mp4', 'webm', 'mkv', 'm4v'].includes(ext)) {
-            logger.info('Detected Facebook video (share/p), will use yt-dlp');
+            logger.info('Detected Facebook video (share), will use yt-dlp');
             return false;
           }
 
-          // Otherwise it's likely a photo/album
-          logger.info('Detected Facebook photo/album (share/p), will attempt image download');
+          logger.info('Detected Facebook photo/album (share), will attempt image download');
           return true;
         } catch {
-          logger.info('Facebook share/p probe failed, attempting proxy resolution for accurate detection');
+          logger.info('Facebook share probe failed, attempting proxy resolution...');
 
           try {
-            // Tier 1.5: Resolve the URL first to get the best one for Embed Plugin
-            const resolutionUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
-            const { stdout: resUrl } = await execAsync(`curl -sL -o /dev/null -w "%{url_effective}" -A "${resolutionUA}" "${url}"`, { timeout: 10000 });
-            let bestUrl = (resUrl && !resUrl.includes('/login')) ? resUrl.trim() : url;
+            const resolutionUA =
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+            const { stdout: resUrl } = await spawnAsync(
+              'curl',
+              ['-sL', '-o', '/dev/null', '-w', '%{url_effective}', '-A', resolutionUA, url],
+              { timeout: 10000 }
+            );
+            const bestUrl = resUrl && !resUrl.includes('/login') ? resUrl.trim() : url;
 
-            // Tier 2: Proxy Fallback via codetabs to check meta tags
             const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(bestUrl)}`;
-            const { stdout: content } = await execAsync(`curl -sL "${proxyUrl}"`, { timeout: 30000 });
+            const { stdout: content } = await spawnAsync('curl', ['-sL', proxyUrl], { timeout: 30000 });
 
-            if (content.includes('og:video') || content.includes('\"video_id\":\"')) {
-              logger.info('Detected Facebook video (share/p) via proxy content');
+            if (content.includes('og:video') || content.includes('"video_id":"')) {
+              logger.info('Detected Facebook video (share) via proxy content');
               return false;
             }
 
-            // Tier 3: Check via Embed Plugin if type still uncertain
             if (content.includes('Connectez-vous') || content.includes('Log In') || content.length < 10000) {
-              // Try to find the fbid for robust check
-              const fbidMatch = bestUrl.match(/(?:fbid=|photo\.php\?fbid=|photos\/[^/]+\/|posts\/[^\/]+\/|posts\/|pfbid)([a-zA-Z0-9]+)/) || content.match(/\"fbid\":\"(\d+)\"/);
+              const fbidMatch =
+                bestUrl.match(/(?:fbid=|photo\.php\?fbid=|photos\/[^/]+\/|posts\/[^/]+\/|posts\/|pfbid)([a-zA-Z0-9]+)/) ||
+                content.match(/"fbid":"(\d+)"/);
               const checkFbid = fbidMatch ? fbidMatch[1] : null;
 
-              const pluginUrlForCheck = checkFbid ? `https://www.facebook.com/facebook/posts/${checkFbid}` : bestUrl;
+              const pluginUrlForCheck = checkFbid
+                ? `https://www.facebook.com/facebook/posts/${checkFbid}`
+                : bestUrl;
               const embedUrl = `https://www.facebook.com/plugins/post.php?href=${encodeURIComponent(pluginUrlForCheck)}`;
               const proxyEmbedUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(embedUrl)}`;
-              const { stdout: embedContent } = await execAsync(`curl -sL "${proxyEmbedUrl}"`, { timeout: 20000 });
-              if (embedContent.includes('swfobject') || embedContent.includes('video_id') || embedContent.includes('\"video_id\"')) {
-                logger.info('Detected Facebook video (share/p) via Embed Plugin');
+              const { stdout: embedContent } = await spawnAsync('curl', ['-sL', proxyEmbedUrl], { timeout: 20000 });
+
+              if (
+                embedContent.includes('swfobject') ||
+                embedContent.includes('video_id') ||
+                embedContent.includes('"video_id"')
+              ) {
+                logger.info('Detected Facebook video (share) via Embed Plugin');
                 return false;
               }
             }
-          } catch (e) {
+          } catch {
             logger.warn('Initial proxy (Codetabs) in isAlbum failed, trying AllOrigins...');
             try {
               const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-              const { stdout: proxyJson } = await execAsync(`curl -s "${proxyUrl}"`, { timeout: 30000 });
+              const { stdout: proxyJson } = await spawnAsync('curl', ['-s', proxyUrl], { timeout: 30000 });
               if (proxyJson && proxyJson.startsWith('{')) {
                 const proxyData = JSON.parse(proxyJson);
                 const content = proxyData.contents || '';
-                if (content.includes('og:video') || content.includes('\"video_id\":\"')) {
-                  logger.info('Detected Facebook video (share/p) via AllOrigins proxy');
+                if (content.includes('og:video') || content.includes('"video_id":"')) {
+                  logger.info('Detected Facebook video (share) via AllOrigins proxy');
                   return false;
                 }
               }
-            } catch (ae) {
+            } catch {
               logger.error('All proxy resolution fallbacks in isAlbum failed');
             }
           }
 
-          // Final Fallback: If we couldn't resolve/probe AND it's a v/r link, be optimistic
-          // and assume it might be a hybrid album (like share/v/ posts with photos).
           if (url.includes('/share/v/') || url.includes('/share/r/')) {
             logger.info('Uncertain /share/v or /share/r link, assuming album/hybrid first');
             return true;
           }
-
           return true;
         }
       }
 
-      // Include photo/album/post patterns
       if (
         url.includes('photo.php') ||
         url.includes('permalink.php') ||
@@ -793,34 +773,32 @@ export async function isAlbum(url: string): Promise<boolean> {
       }
     }
 
-    // TikTok detection - only treat as album if it's an actual photo carousel
+    // TikTok detection
     if (url.includes('tiktok.com')) {
-      // If URL contains /photo/, it's definitely a photo carousel
       if (url.includes('/photo/')) {
         logger.info('Detected TikTok photo carousel (URL contains /photo/)');
         return true;
       }
 
       try {
-        const galleryDlPath = config.galleryDlPath;
-        const { stdout, stderr } = await execAsync(`${galleryDlPath} \"${url}\" --get-urls 2>&1`, { timeout: 10000 });
+        const { stdout, stderr } = await spawnAsync(
+          config.galleryDlPath,
+          [url, '--get-urls'],
+          { timeout: 10000 }
+        );
         const output = (stdout + (stderr || '')).toLowerCase();
         const urls = stdout.trim().split('\n').filter(line => line.startsWith('http'));
 
-        // Check if output contains '/photo/' (indicates photo carousel after redirect)
         if (output.includes('/photo/')) {
           logger.info('Detected TikTok photo carousel (gallery-dl output contains /photo/)');
           return true;
         }
 
-        // Only treat as album if there are MULTIPLE image URLs (photo carousel)
-        // Single video URLs should use yt-dlp for proper aspect ratio
         if (urls.length > 1) {
           logger.info('Detected TikTok photo carousel (multiple images)');
           return true;
         }
 
-        // Single URL = regular video, use yt-dlp
         logger.info('Detected TikTok video (single item), will use yt-dlp');
         return false;
       } catch {
@@ -829,15 +807,20 @@ export async function isAlbum(url: string): Promise<boolean> {
     }
 
     // General detection via yt-dlp
-    const { stdout: playlistCheck } = await execAsync(
-      `"${config.ytDlpPath}" "${url}" --flat-playlist --print "%(playlist_count)s" --no-warnings 2>&1`,
+    const { stdout: playlistCheck } = await spawnAsync(
+      config.ytDlpPath,
+      [url, '--flat-playlist', '--print', '%(playlist_count)s', '--no-warnings'],
       { timeout: 10000 }
     ).catch(() => ({ stdout: '' }));
 
     if (parseInt(playlistCheck.trim()) > 1) return true;
 
     try {
-      const result = await execAsync(`"${config.ytDlpPath}" "${url}" --print "%(ext)s" 2>&1`, { timeout: 10000 });
+      const result = await spawnAsync(
+        config.ytDlpPath,
+        [url, '--print', '%(ext)s'],
+        { timeout: 10000 }
+      );
       const output = (result.stdout + (result.stderr || '')).toLowerCase();
       if (output.includes('no video') || output.includes('there is no video')) return true;
 
