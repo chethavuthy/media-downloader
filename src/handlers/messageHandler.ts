@@ -11,7 +11,6 @@ import { logger } from '../utils/logger.js';
 import { Telegram } from 'telegraf';
 
 import { getRandomReaction, getRandomFailedReaction } from '../utils/reactions.js';
-import { getRandomCompletionPhrase } from '../utils/phrases.js';
 import { downloadAlbum, isAlbum } from '../services/imageService.js';
 
 export async function handleMessage(ctx: Context<Update.MessageUpdate>): Promise<void> {
@@ -132,16 +131,12 @@ export function setupJobProcessor(telegram: Telegram): void {
           if (mediaFiles.length === 1) {
             logger.info(`Single item "album" detected, sending as single media`);
             const media = mediaFiles[0];
-            const caption = getRandomCompletionPhrase();
-
             if (media.type === 'photo') {
               await telegram.sendPhoto(job.chatId, { source: media.path }, {
-                caption: caption,
                 reply_parameters: { message_id: job.messageId },
               });
             } else {
               await telegram.sendVideo(job.chatId, { source: media.path }, {
-                caption: caption,
                 reply_parameters: { message_id: job.messageId },
                 supports_streaming: true,
               });
@@ -153,7 +148,6 @@ export function setupJobProcessor(telegram: Telegram): void {
 
           // Send as media groups (batches of 10)
           const batchSize = 10;
-          const completionPhrase = getRandomCompletionPhrase();
 
           logger.info(`Starting batch sending for ${mediaFiles.length} items`);
 
@@ -164,43 +158,32 @@ export function setupJobProcessor(telegram: Telegram): void {
 
             logger.info(`Processing batch ${batchNum}/${totalBatches}: ${batch.length} items`);
 
-            // Generate caption for this batch
-            const batchSuffix = totalBatches > 1 ? ` (${batchNum}/${totalBatches})` : '';
-            const currentCaption = completionPhrase + batchSuffix;
-
             if (batch.length === 1) {
               logger.info(`Sending batch as single media`);
               const media = batch[0];
 
               if (media.type === 'photo') {
                 await telegram.sendPhoto(job.chatId, { source: media.path }, {
-                  caption: currentCaption,
                   reply_parameters: { message_id: job.messageId },
                 });
               } else {
                 await telegram.sendVideo(job.chatId, { source: media.path }, {
-                  caption: currentCaption,
                   reply_parameters: { message_id: job.messageId },
                   supports_streaming: true,
                 });
               }
             } else {
               logger.info(`Sending batch as media group`);
-              const mediaGroup = batch.map((media, index) => {
-                // Only first item in each batch gets the caption
-                const caption = index === 0 ? currentCaption : undefined;
-
+              const mediaGroup = batch.map((media) => {
                 if (media.type === 'photo') {
                   return {
                     type: 'photo',
                     media: { source: media.path },
-                    caption: caption,
                   };
                 } else {
                   return {
                     type: 'video',
                     media: { source: media.path },
-                    caption: caption,
                     supports_streaming: true,
                   };
                 }
@@ -247,8 +230,6 @@ export function setupJobProcessor(telegram: Telegram): void {
       // Detect if it's a photo or video based on extension
       const ext = actualPath.split('.').pop()?.toLowerCase();
       const isPhoto = ['jpg', 'jpeg', 'png', 'webp'].includes(ext || '');
-
-      const caption = getRandomCompletionPhrase();
 
       // Get video metadata for Telegram (dimensions and duration)
       let videoWidth: number | undefined;
@@ -311,12 +292,10 @@ export function setupJobProcessor(telegram: Telegram): void {
             await telegram.sendChatAction(job.chatId, 'upload_photo').catch(() => { });
 
             await telegram.sendPhoto(job.chatId, { source: actualPath }, {
-              caption: caption,
               reply_parameters: { message_id: job.messageId },
             });
           } else {
             await telegram.sendVideo(job.chatId, { source: actualPath }, {
-              caption: caption,
               reply_parameters: { message_id: job.messageId },
               supports_streaming: true,
               width: videoWidth,
@@ -333,7 +312,7 @@ export function setupJobProcessor(telegram: Telegram): void {
             // If all retries failed, send as document instead
             logger.warn(`Upload failed after ${maxRetries} attempts, sending as document`);
             await telegram.sendDocument(job.chatId, { source: actualPath }, {
-              caption: `${caption}\n\n⚠️ Sent as file due to upload issues`,
+              caption: `⚠️ Sent as file due to upload issues`,
               reply_parameters: { message_id: job.messageId },
             });
             uploadSuccess = true;
