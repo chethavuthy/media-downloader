@@ -64,9 +64,9 @@ export async function downloadVideo(url: string, outputPath: string): Promise<st
     const limit = config.maxFileSizeMB;
     const ytdlFlags: any = {
       output: outputPath,
-      // Try to find a version that fits in the size limit and is compatible with Telegram (avc1)
-      // Priority: AVC MP4 <= 360p (target ~14MB) -> AVC MP4 <= 480p -> any MP4 < limit -> any format < limit -> best AVC MP4 -> best
-      format: `(bestvideo[vcodec^=avc1][ext=mp4][height<=360][filesize<${limit}M]+bestaudio[ext=m4a]/best[vcodec^=avc1][ext=mp4][height<=360][filesize<${limit}M]/bestvideo[vcodec^=avc1][ext=mp4][height<=480][filesize<${limit}M]+bestaudio[ext=m4a]/best[vcodec^=avc1][ext=mp4][height<=480][filesize<${limit}M]/best[vcodec^=avc1][ext=mp4][filesize<${limit}M]/best[filesize<${limit}M]/best)`,
+      // Try to find a version that fits in the size limit and is compatible with Telegram (avc1/h264)
+      // Priority: Best AVC/H.264 MP4 under limit -> Best any format under limit -> best
+      format: `(bestvideo[vcodec~='^avc1|^h264'][ext=mp4][filesize<${limit}M]+bestaudio[ext=m4a]/best[vcodec~='^avc1|^h264'][ext=mp4][filesize<${limit}M]/best[filesize<${limit}M]/best)`,
       noWarnings: true,
       noCheckCertificates: true,
       preferFreeFormats: true,
