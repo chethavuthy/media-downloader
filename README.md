@@ -16,6 +16,7 @@ A production-ready Telegram bot that downloads videos from multiple platforms wi
 - **Multi-Platform Support**: TikTok, Douyin, YouTube, Instagram, Facebook, Twitter/X
 - **Bilingual**: Full support for Khmer and English
 - **Private & Group Chats**: Works seamlessly in both contexts
+- **Inline Mode**: Type `@bot [link]` in any chat — no need to add bot to group
 - **Rate Limiting**: Prevents abuse with configurable limits
 - **Smart Queue System**: Handles multiple downloads concurrently
 - **Auto Cleanup**: Temporary files are automatically deleted
@@ -62,6 +63,8 @@ A production-ready Telegram bot that downloads videos from multiple platforms wi
    - Message [@BotFather](https://t.me/botfather) on Telegram
    - Send `/newbot` and follow instructions
    - Copy the token to your `.env` file
+   - For inline mode: send `/setinline` and set placeholder (e.g. "Paste video link")
+   - For inline feedback: send `/setinlinefeedback` (enables chosen_inline_result)
 
 ### Running the Bot
 
@@ -91,6 +94,13 @@ npm run build
 3. Bot automatically detects and downloads videos
 4. Videos are sent back to the group
 
+### Inline Mode (no need to add bot to group)
+
+1. In any chat, type `@YourBotUsername https://tiktok.com/...`
+2. Tap the video result (placeholder shows while downloading)
+3. Video appears in the chat as "You via @YourBotUsername"
+4. Requires `MEDIA_CHAT_ID` (channel/group where bot uploads to get file_id)
+
 ## ⚙️ Configuration
 
 Edit `.env` to customize bot behavior:
@@ -105,6 +115,8 @@ Edit `.env` to customize bot behavior:
 | `CONCURRENT_DOWNLOADS` | 3 | Max simultaneous downloads |
 | `AUTO_CLEANUP_MINUTES` | 30 | How often to clean old files |
 | `LOG_LEVEL` | info | Logging level (info/warn/error) |
+| `MEDIA_CHAT_ID` | - | For inline: chat where bot uploads to get file_id (required for "via @bot") |
+| `BOT_USERNAME` | - | For TikTok caption: "mention @BOT_USERNAME to download any video" |
 
 ## 🏗️ Architecture
 

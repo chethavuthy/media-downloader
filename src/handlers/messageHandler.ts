@@ -3,7 +3,7 @@ import { Update } from 'telegraf/types';
 import { randomUUID } from 'crypto';
 import { DownloadJob, JobStatus } from '../types/index.js';
 import { extractUrls, isVideoUrl, normalizeUrl, detectPlatform } from '../utils/urlDetector.js';
-import { validateUrl, downloadVideo } from '../services/videoService.js';
+import { validateUrl, downloadVideo, getVideoInfo } from '../services/videoService.js';
 import { queueService } from '../services/queueService.js';
 import { createTempPath, getActualFilePath, validateFileSize, cleanup } from '../services/fileService.js';
 import { getText } from '../locales/index.js';
@@ -12,6 +12,22 @@ import { Telegram } from 'telegraf';
 
 import { getRandomReaction, getRandomFailedReaction } from '../utils/reactions.js';
 import { downloadAlbum, isAlbum } from '../services/imageService.js';
+import { config } from '../config/index.js';
+import { Platform } from '../types/index.js';
+
+const CAPTION_MAX = 1024;
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function buildTikTokCaption(info: { title?: string; description?: string }): string | undefined {
+  if (!config.botUsername) return undefined;
+  const base = (info.description || info.title || '').trim();
+  const mention = `<i>mention @${config.botUsername} to download any videos</i>`;
+  const full = base ? `<blockquote>${escapeHtml(base)}</blockquote>\n\n${mention}` : mention;
+  return full.slice(0, CAPTION_MAX) || undefined;
+}
 
 export async function handleMessage(ctx: Context<Update.MessageUpdate>): Promise<void> {
   const userId = ctx.from?.id;
@@ -101,13 +117,12 @@ export async function handleMessage(ctx: Context<Update.MessageUpdate>): Promise
 // Set up the job processor callback
 export function setupJobProcessor(telegram: Telegram): void {
   queueService.setJobCallback(async (job: DownloadJob) => {
-    // Keep action alive (actions expire every 5s)
-    const actionInterval = setInterval(async () => {
+    const isInline = !!job.inlineMessageId;
+    const actionInterval = isInline ? 0 : setInterval(async () => {
       try {
-        // We use upload_video by default for the whole process
         await telegram.sendChatAction(job.chatId, 'upload_video');
       } catch (err) {
-        // Ignore errors if action fails
+        // Ignore
       }
     }, 4000);
 
@@ -117,6 +132,16 @@ export function setupJobProcessor(telegram: Telegram): void {
 
       if (checkAlbum) {
         logger.info(`Detected album/carousel: ${job.url}`);
+
+        let albumCaption: string | undefined;
+        if (job.platform === Platform.TIKTOK) {
+          try {
+            const info = await getVideoInfo(job.url);
+            albumCaption = buildTikTokCaption(info);
+          } catch (e) {
+            logger.warn('Could not get TikTok caption for album');
+          }
+        }
 
         // Download all media from album
         const albumDir = createTempPath(job.id).replace('.%(ext)s', '');
@@ -133,12 +158,13 @@ export function setupJobProcessor(telegram: Telegram): void {
             const media = mediaFiles[0];
             if (media.type === 'photo') {
               await telegram.sendPhoto(job.chatId, { source: media.path }, {
-                reply_parameters: { message_id: job.messageId },
+                ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
               });
             } else {
               await telegram.sendVideo(job.chatId, { source: media.path }, {
-                reply_parameters: { message_id: job.messageId },
+                ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
                 supports_streaming: true,
+                ...(albumCaption ? { caption: albumCaption, parse_mode: 'HTML' as const } : {}),
               });
             }
 
@@ -164,33 +190,37 @@ export function setupJobProcessor(telegram: Telegram): void {
 
               if (media.type === 'photo') {
                 await telegram.sendPhoto(job.chatId, { source: media.path }, {
-                  reply_parameters: { message_id: job.messageId },
+                  ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
                 });
               } else {
                 await telegram.sendVideo(job.chatId, { source: media.path }, {
-                  reply_parameters: { message_id: job.messageId },
+                  ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
                   supports_streaming: true,
+                  ...(albumCaption ? { caption: albumCaption, parse_mode: 'HTML' as const } : {}),
                 });
               }
             } else {
               logger.info(`Sending batch as media group`);
-              const mediaGroup = batch.map((media) => {
+              const mediaGroup = batch.map((media, i) => {
+                const cap = albumCaption && i === 0 ? albumCaption : undefined;
                 if (media.type === 'photo') {
                   return {
                     type: 'photo',
                     media: { source: media.path },
+                    ...(cap ? { caption: cap, parse_mode: 'HTML' as const } : {}),
                   };
                 } else {
                   return {
                     type: 'video',
                     media: { source: media.path },
                     supports_streaming: true,
+                    ...(cap ? { caption: cap, parse_mode: 'HTML' as const } : {}),
                   };
                 }
               });
 
               await telegram.sendMediaGroup(job.chatId, mediaGroup as any, {
-                reply_parameters: { message_id: job.messageId },
+                ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
               });
             }
 
@@ -210,7 +240,83 @@ export function setupJobProcessor(telegram: Telegram): void {
 
       // Single media download (existing logic)
       const outputPath = createTempPath(job.id);
-      await downloadVideo(job.url, outputPath);
+
+      try {
+        await downloadVideo(job.url, outputPath);
+      } catch (videoError: any) {
+        // If yt-dlp says "unsupported" for TikTok, it's likely a photo post — retry via album/gallery-dl
+        if (videoError.code === 'UNSUPPORTED' && job.url.includes('tiktok.com')) {
+          logger.info(`TikTok video download unsupported, retrying as album/photo: ${job.url}`);
+          let fallbackCaption: string | undefined;
+          try {
+            const info = await getVideoInfo(job.url);
+            fallbackCaption = buildTikTokCaption(info);
+          } catch (e) {
+            logger.warn('Could not get TikTok caption for fallback');
+          }
+          const albumDir = createTempPath(job.id + '-album').replace('.%(ext)s', '');
+          const mediaFiles = await downloadAlbum(job.url, albumDir);
+
+          if (mediaFiles.length > 0) {
+            // Send as single or media group (reuse album sending logic)
+            if (mediaFiles.length === 1) {
+              const media = mediaFiles[0];
+              if (media.type === 'photo') {
+                await telegram.sendPhoto(job.chatId, { source: media.path }, {
+                  ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
+                });
+              } else {
+                await telegram.sendVideo(job.chatId, { source: media.path }, {
+                  ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
+                  supports_streaming: true,
+                  ...(fallbackCaption ? { caption: fallbackCaption, parse_mode: 'HTML' as const } : {}),
+                });
+              }
+            } else {
+              const batchSize = 10;
+              for (let i = 0; i < mediaFiles.length; i += batchSize) {
+                const batch = mediaFiles.slice(i, i + batchSize);
+                if (batch.length === 1) {
+                  const media = batch[0];
+                  if (media.type === 'photo') {
+                    await telegram.sendPhoto(job.chatId, { source: media.path }, {
+                      ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
+                    });
+                  } else {
+                    await telegram.sendVideo(job.chatId, { source: media.path }, {
+                      ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
+                      supports_streaming: true,
+                      ...(fallbackCaption ? { caption: fallbackCaption, parse_mode: 'HTML' as const } : {}),
+                    });
+                  }
+                } else {
+                  const mediaGroup = batch.map((media, idx) => ({
+                    type: media.type === 'photo' ? 'photo' as const : 'video' as const,
+                    media: { source: media.path },
+                    ...(media.type === 'video' ? { supports_streaming: true } : {}),
+                    ...(fallbackCaption && i === 0 && idx === 0 ? { caption: fallbackCaption, parse_mode: 'HTML' as const } : {}),
+                  }));
+                  await telegram.sendMediaGroup(job.chatId, mediaGroup as any, {
+                    ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
+                  });
+                }
+                if (i + batchSize < mediaFiles.length) {
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+              }
+            }
+
+            await cleanup(albumDir);
+            logger.info(`TikTok photo fallback succeeded: ${job.id}`);
+            return;
+          }
+
+          // If album download also failed, rethrow original error
+          await cleanup(albumDir);
+          throw videoError;
+        }
+        throw videoError;
+      }
 
       // Get actual file path (with real extension)
       const actualPath = await getActualFilePath(outputPath);
@@ -280,7 +386,48 @@ export function setupJobProcessor(telegram: Telegram): void {
         }
       }
 
-      // Send media to user with retry logic for SSL errors
+      let caption: string | undefined;
+      if (job.platform === Platform.TIKTOK) {
+        try {
+          const info = await getVideoInfo(job.url);
+          caption = buildTikTokCaption(info);
+        } catch (e) {
+          logger.warn('Could not get TikTok caption');
+        }
+      }
+
+      // Inline: upload to media chat, get file_id, replace placeholder
+      if (isInline && config.mediaChatId && !isPhoto) {
+        try {
+          const sent = await telegram.sendVideo(config.mediaChatId, { source: actualPath }, {
+            supports_streaming: true,
+            width: videoWidth,
+            height: videoHeight,
+            duration: videoDuration,
+            ...(caption ? { caption, parse_mode: 'HTML' as const } : {}),
+          });
+          const fileId = sent.video?.file_id;
+          if (fileId) {
+            await telegram.editMessageMedia(undefined, undefined, job.inlineMessageId!, {
+              type: 'video',
+              media: fileId,
+              supports_streaming: true,
+              width: videoWidth,
+              height: videoHeight,
+              duration: videoDuration,
+              ...(caption ? { caption, parse_mode: 'HTML' as const } : {}),
+            });
+          }
+        } catch (err) {
+          logger.error(`Inline replace failed: ${err}`);
+          await telegram.sendMessage(job.chatId, getText(job.userId, 'downloadFailed'));
+        }
+        await cleanup(actualPath);
+        logger.info(`Inline job completed: ${job.id}`);
+        return;
+      }
+
+      // Regular: send to chat
       const maxRetries = 3;
       let retries = 0;
       let uploadSuccess = false;
@@ -288,36 +435,32 @@ export function setupJobProcessor(telegram: Telegram): void {
       while (retries < maxRetries && !uploadSuccess) {
         try {
           if (isPhoto) {
-            // Change action to photo if applicable
             await telegram.sendChatAction(job.chatId, 'upload_photo').catch(() => { });
-
             await telegram.sendPhoto(job.chatId, { source: actualPath }, {
-              reply_parameters: { message_id: job.messageId },
+              ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
             });
           } else {
             await telegram.sendVideo(job.chatId, { source: actualPath }, {
-              reply_parameters: { message_id: job.messageId },
+              ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
               supports_streaming: true,
               width: videoWidth,
               height: videoHeight,
               duration: videoDuration,
+              ...(caption ? { caption, parse_mode: 'HTML' as const } : {}),
             });
           }
           uploadSuccess = true;
         } catch (uploadError: any) {
           retries++;
           const isSslError = uploadError.message?.includes('SSL') || uploadError.message?.includes('ECONNRESET');
-
           if (retries >= maxRetries) {
-            // If all retries failed, send as document instead
             logger.warn(`Upload failed after ${maxRetries} attempts, sending as document`);
             await telegram.sendDocument(job.chatId, { source: actualPath }, {
               caption: `⚠️ Sent as file due to upload issues`,
-              reply_parameters: { message_id: job.messageId },
+              ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
             });
             uploadSuccess = true;
           } else if (isSslError) {
-            logger.warn(`SSL error on attempt ${retries}/${maxRetries}, retrying in ${retries * 2}s...`);
             await new Promise(resolve => setTimeout(resolve, retries * 2000));
           } else {
             throw uploadError;
@@ -325,23 +468,21 @@ export function setupJobProcessor(telegram: Telegram): void {
         }
       }
 
-      // Cleanup
       await cleanup(actualPath);
-
       logger.info(`Job completed successfully: ${job.id}`);
     } catch (error) {
       logger.error(`Job processing failed: ${job.id}`, error as Error);
 
       // Send error message
       try {
-        // Apply failed reaction instead of text message
-        const failedReaction = getRandomFailedReaction();
-        await telegram.setMessageReaction(job.chatId, job.messageId, [
-          { type: 'emoji', emoji: failedReaction as any }
-        ]).catch(() => { });
-
-        // Suppress text message as requested
-        // await telegram.sendMessage(job.chatId, getText(job.userId, 'downloadFailed'));
+        if (job.messageId) {
+          const failedReaction = getRandomFailedReaction();
+          await telegram.setMessageReaction(job.chatId, job.messageId, [
+            { type: 'emoji', emoji: failedReaction as any }
+          ]).catch(() => { });
+        } else {
+          await telegram.sendMessage(job.chatId, getText(job.userId, 'downloadFailed'));
+        }
       } catch (sendError) {
         logger.error('Failed to update reaction on failure', sendError as Error);
       }

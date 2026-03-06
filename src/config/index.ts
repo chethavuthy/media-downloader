@@ -15,6 +15,10 @@ interface Config {
   concurrentDownloads: number;
   autoCleanupMinutes: number;
   logLevel: string;
+  /** Chat ID to upload video for file_id (for inline replace). Bot must be member. */
+  mediaChatId: string;
+  /** Bot username for caption mention (e.g. TestClipSn1perBot) */
+  botUsername: string;
 }
 
 function getEnvVar(key: string, defaultValue?: string): string {
@@ -43,4 +47,6 @@ export const config: Config = {
   concurrentDownloads: getEnvNumber('CONCURRENT_DOWNLOADS', 3),
   autoCleanupMinutes: getEnvNumber('AUTO_CLEANUP_MINUTES', 30),
   logLevel: getEnvVar('LOG_LEVEL', 'info'),
+  mediaChatId: getEnvVar('MEDIA_CHAT_ID', ''),
+  botUsername: getEnvVar('BOT_USERNAME', ''),
 };

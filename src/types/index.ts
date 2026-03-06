@@ -37,6 +37,8 @@ export interface DownloadJob {
   filePath?: string;
   error?: string;
   createdAt: Date;
+  /** For inline mode: replace placeholder in chat with downloaded video */
+  inlineMessageId?: string;
 }
 
 export interface VideoInfo {
@@ -44,6 +46,8 @@ export interface VideoInfo {
   duration?: number;
   platform: Platform;
   thumbnail?: string;
+  /** Caption/description (e.g. TikTok) */
+  description?: string;
 }
 
 export interface RateLimitEntry {

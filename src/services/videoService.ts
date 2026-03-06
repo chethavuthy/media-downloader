@@ -36,6 +36,7 @@ export async function getVideoInfo(url: string): Promise<VideoInfo> {
       duration: info.duration,
       platform: detectPlatform(url),
       thumbnail: info.thumbnail,
+      description: info.description || info.fulltitle,
     };
   } catch (error) {
     logger.error('Failed to get video info', error as Error);
@@ -133,6 +134,11 @@ export async function downloadVideo(url: string, outputPath: string): Promise<st
       throw new VideoDownloadError('Access denied - video may be private or region-locked', 'GEO_RESTRICTED');
     }
     if (errorMessage.includes('unsupported url') || errorMessage.includes('no video formats')) {
+      // For TikTok, "unsupported url" usually means it's a photo post that yt-dlp can't handle.
+      // Signal this specifically so the caller can retry via the album/gallery-dl path.
+      if (detectPlatform(url) === Platform.TIKTOK) {
+        throw new VideoDownloadError('TikTok photo post - use album download instead', 'UNSUPPORTED');
+      }
       throw new VideoDownloadError('Unsupported platform or format', 'UNSUPPORTED');
     }
     if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {

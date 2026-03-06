@@ -673,14 +673,50 @@ export async function downloadAlbum(url: string, outputDir: string): Promise<Dow
 }
 
 /**
+ * Resolve TikTok short URLs (vt.tiktok.com, vm.tiktok.com) to their full URL
+ * so we can detect /photo/ vs /video/ paths.
+ */
+async function resolveTikTokShortUrl(url: string): Promise<string> {
+  try {
+    // Only resolve if it's a short URL without /photo/ or /video/ already
+    if (url.includes('/photo/') || url.includes('/video/')) {
+      return url;
+    }
+
+    // Check if it's a short URL pattern (vt.tiktok.com, vm.tiktok.com, or tiktok.com without /photo/ or /video/)
+    const isShortUrl = /^https?:\/\/(?:vt|vm)\.tiktok\.com\//i.test(url) ||
+      (url.includes('tiktok.com') && !url.includes('/photo/') && !url.includes('/video/') && !url.includes('/@'));
+
+    if (!isShortUrl) return url;
+
+    logger.info(`Resolving TikTok short URL: ${url}`);
+    const { stdout } = await safeExec(
+      `curl -sL -o /dev/null -w "%{url_effective}" -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" "${url}"`,
+      10000
+    );
+
+    const resolvedUrl = stdout.trim();
+    if (resolvedUrl && resolvedUrl !== url) {
+      logger.info(`Resolved TikTok URL: ${resolvedUrl}`);
+      return resolvedUrl;
+    }
+  } catch (e: any) {
+    logger.warn(`Failed to resolve TikTok short URL: ${e.message}`);
+  }
+  return url;
+}
+
+/**
  * Check if a URL contains media (images/videos) or is an album/carousel
  */
 export async function isAlbum(url: string): Promise<boolean> {
   try {
     // Quick regex checks first to avoid spawning processes
     if (url.includes('tiktok.com')) {
-      if (url.includes('/photo/')) return true;
-      if (url.includes('/video/')) return false;
+      // Resolve short URLs first to detect /photo/ vs /video/
+      const resolvedUrl = await resolveTikTokShortUrl(url);
+      if (resolvedUrl.includes('/photo/')) return true;
+      if (resolvedUrl.includes('/video/')) return false;
     }
 
     // Instagram detection
