@@ -10,6 +10,54 @@ import { logger } from './utils/logger.js';
 import http from 'http';
 import dns from 'dns';
 
+function startHealthServer(port: number) {
+  http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.write('Bot is running!');
+    res.end();
+  }).listen(port);
+  logger.info(`Health check server listening on port ${port}`);
+}
+
+async function startWebhookServer(bot: Telegraf, port: number) {
+  const secretToken = config.telegramWebhookSecretToken || undefined;
+
+  await bot.telegram.setWebhook(
+    config.telegramWebhookUrl,
+    secretToken ? { secret_token: secretToken } : undefined
+  );
+  logger.info(`Telegram webhook set: ${config.telegramWebhookUrl}`);
+
+  const webhookHandler = bot.webhookCallback(config.telegramWebhookPath, { secretToken });
+
+  http.createServer((req, res) => {
+    const method = req.method || 'GET';
+    const path = (req.url || '/').split('?')[0] || '/';
+
+    if (method === 'GET' && (path === '/' || path === '/health' || path === '/healthz')) {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('Bot is running!');
+      return;
+    }
+
+    if (path === config.telegramWebhookPath && method === 'POST') {
+      webhookHandler(req, res).catch((error) => {
+        logger.error('Webhook handler failed', error as Error);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false }));
+        }
+      });
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: 'Not found' }));
+  }).listen(port);
+
+  logger.info(`Webhook server listening on port ${port} path ${config.telegramWebhookPath}`);
+}
+
 async function main() {
   logger.info('Starting Telegram Video Downloader Bot...');
 
@@ -27,14 +75,7 @@ async function main() {
     else logger.info(`DNS Lookup Test Successful: api.telegram.org resolved to ${address}`);
   });
 
-  // Start a simple dummy HTTP server for health checks (required by some hosting platforms like Hugging Face)
-  const port = process.env.PORT || 7860;
-  http.createServer((_req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.write('Bot is running!');
-    res.end();
-  }).listen(port);
-  logger.info(`Health check server listening on port ${port}`);
+  const port = parseInt(process.env.PORT || '7860', 10);
 
   // Initialize bot
   const bot = new Telegraf(config.telegramBotToken);
@@ -81,7 +122,24 @@ async function main() {
     bot.stop('SIGTERM');
   });
 
-  // Launch bot with retry logic for network issues (common on Hugging Face)
+  if (config.telegramUseWebhook) {
+    await startWebhookServer(bot, port);
+    logger.info('Bot is running successfully in webhook mode!');
+    return;
+  }
+
+  // Polling mode fallback (legacy)
+  try {
+    // Ensure polling works even if a previous deployment left webhook mode enabled.
+    await bot.telegram.deleteWebhook();
+    logger.info('Existing Telegram webhook removed for polling mode');
+  } catch (error) {
+    logger.warn('Could not remove existing webhook before polling startup');
+  }
+
+  startHealthServer(port);
+
+  // Launch bot with retry logic for network issues
   const maxRetries = 10;
   let retries = 0;
 

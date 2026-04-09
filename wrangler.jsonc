@@ -1,0 +1,54 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "clipsniper-bot",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-04-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "containers": [
+    {
+      "class_name": "BotContainer",
+      "image": "./Dockerfile",
+      "max_instances": 1,
+      "instance_type": "basic"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BOT_CONTAINER",
+        "class_name": "BotContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["BotContainer"]
+    }
+  ],
+  "secrets": {
+    "required": [
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_WEBHOOK_URL",
+      "TELEGRAM_WEBHOOK_PATH",
+      "TELEGRAM_WEBHOOK_SECRET_TOKEN",
+      "BOT_USERNAME",
+      "CONCURRENT_DOWNLOADS",
+      "COOKIES_PATH",
+      "DOWNLOAD_TIMEOUT_SECONDS",
+      "GALLERY_DL_PATH",
+      "INSTALOADER_PATH",
+      "LOG_LEVEL",
+      "MAX_DOWNLOADS_PER_USER",
+      "MAX_FILE_SIZE_MB",
+      "MEDIA_CHAT_ID",
+      "RATE_LIMIT_WINDOW_MINUTES",
+      "YT_DLP_PATH",
+      "AUTO_CLEANUP_MINUTES"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
