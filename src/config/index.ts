@@ -4,6 +4,10 @@ dotenv.config();
 
 interface Config {
   telegramBotToken: string;
+  telegramUseWebhook: boolean;
+  telegramWebhookUrl: string;
+  telegramWebhookPath: string;
+  telegramWebhookSecretToken: string;
   ytDlpPath: string;
   instaloaderPath: string;
   galleryDlPath: string;
@@ -23,10 +27,10 @@ interface Config {
 
 function getEnvVar(key: string, defaultValue?: string): string {
   const value = process.env[key];
-  if (!value && !defaultValue) {
+  if ((value === undefined || value === '') && defaultValue === undefined) {
     throw new Error(`Missing required environment variable: ${key}`);
   }
-  return value || defaultValue!;
+  return value !== undefined ? value : defaultValue!;
 }
 
 function getEnvNumber(key: string, defaultValue: number): number {
@@ -34,8 +38,31 @@ function getEnvNumber(key: string, defaultValue: number): number {
   return value ? parseInt(value, 10) : defaultValue;
 }
 
+function getEnvBoolean(key: string, defaultValue: boolean): boolean {
+  const value = process.env[key];
+  if (!value) return defaultValue;
+  return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
+}
+
+function normalizeWebhookPath(path: string): string {
+  if (!path.startsWith('/')) return `/${path}`;
+  return path;
+}
+
+const telegramUseWebhook = getEnvBoolean('TELEGRAM_USE_WEBHOOK', false);
+const telegramWebhookPath = normalizeWebhookPath(getEnvVar('TELEGRAM_WEBHOOK_PATH', '/telegram/webhook'));
+const telegramWebhookUrl = getEnvVar('TELEGRAM_WEBHOOK_URL', '');
+
+if (telegramUseWebhook && !telegramWebhookUrl) {
+  throw new Error('Missing required environment variable: TELEGRAM_WEBHOOK_URL (required when TELEGRAM_USE_WEBHOOK=true)');
+}
+
 export const config: Config = {
   telegramBotToken: getEnvVar('TELEGRAM_BOT_TOKEN'),
+  telegramUseWebhook,
+  telegramWebhookUrl,
+  telegramWebhookPath,
+  telegramWebhookSecretToken: getEnvVar('TELEGRAM_WEBHOOK_SECRET_TOKEN', ''),
   ytDlpPath: getEnvVar('YT_DLP_PATH', 'yt-dlp'),
   instaloaderPath: getEnvVar('INSTALOADER_PATH', 'instaloader'),
   galleryDlPath: getEnvVar('GALLERY_DL_PATH', 'gallery-dl'),

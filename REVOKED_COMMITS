@@ -1,0 +1,3 @@
+# Commit SHAs that must not be pushed (one per line)
+# Add a SHA here after force-pushing to remove it from history.
+# Example: abc123def456...

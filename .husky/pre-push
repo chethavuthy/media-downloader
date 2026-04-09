@@ -1,0 +1,22 @@
+#!/bin/sh
+# Blocks push if it would re-introduce revoked commits.
+# Add revoked SHAs to REVOKED_COMMITS in repo root.
+
+REVOKED_FILE="REVOKED_COMMITS"
+[ ! -f "$REVOKED_FILE" ] && exit 0
+
+revoked=$(grep -v '^#' "$REVOKED_FILE" | grep -v '^$' | tr '\n' ' ')
+[ -z "$revoked" ] && exit 0
+
+while read local_ref local_sha remote_ref remote_sha; do
+  [ -z "$remote_sha" ] && continue
+  for sha in $revoked; do
+    if git merge-base --is-ancestor "$sha" "$local_sha" 2>/dev/null && \
+       ! git merge-base --is-ancestor "$sha" "$remote_sha" 2>/dev/null; then
+      echo "Blocked: push would re-introduce revoked commit $sha"
+      exit 1
+    fi
+  done
+done
+
+exit 0
