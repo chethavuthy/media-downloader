@@ -1,4 +1,5 @@
 import { Context } from 'telegraf';
+import { CallbackQuery } from 'telegraf/types';
 import { randomUUID } from 'crypto';
 import { DownloadJob, JobStatus } from '../types/index.js';
 import { extractUrls, isVideoUrl, normalizeUrl, detectPlatform } from '../utils/urlDetector.js';
@@ -9,12 +10,22 @@ import { logger } from '../utils/logger.js';
 import { checkRateLimit, recordRequest } from '../services/rateLimitService.js';
 import { config } from '../config/index.js';
 import { askGemini, askBrave, askTavily } from '../services/aiService.js';
+import {
+  extractTikTokFindQuery,
+  findTikTokVideoUrl,
+  TikTokDiscoveryMode,
+} from '../services/tiktokDiscoveryService.js';
 
 const ASK_AI_PREFIX = /^ask\s+(?:ai|grok|gemini|brave|deep|tavily)\b[:\-]?\s*/i;
 const INLINE_RESULT_ID_VIDEO = 'download_video';
 const INLINE_RESULT_ID_ASK_GEMINI = 'ask_gemini';
 const INLINE_RESULT_ID_ASK_BRAVE = 'ask_brave';
 const INLINE_RESULT_ID_ASK_TAVILY = 'ask_tavily';
+const INLINE_RESULT_ID_TIKTOK_WEB = 'tiktok_web';
+const INLINE_RESULT_ID_TIKTOK_AI = 'tiktok_ai';
+const INLINE_RESULT_ID_TIKTOK_SCRAP = 'tiktok_scrap';
+const TIKTOK_NEXT_PREFIX = 'tt_next:';
+const TIKTOK_SEARCH_TTL_MS = 30 * 60 * 1000;
 const MAX_PLACEHOLDER_QUESTION_LENGTH = 220;
 const MAX_ANSWER_LENGTH = 3800;
 const MAX_LINKS = 5;
@@ -22,6 +33,16 @@ const HTML_TEXT_OPTIONS = {
   parse_mode: 'HTML' as const,
   disable_web_page_preview: true,
 };
+
+interface TikTokSearchSession {
+  query: string;
+  mode: TikTokDiscoveryMode;
+  userId: number;
+  usedUrls: string[];
+  createdAt: number;
+}
+
+const tikTokSearchSessions = new Map<string, TikTokSearchSession>();
 
 function parseAiQuestion(query: string): string | null {
   const trimmed = query.trim();
@@ -114,6 +135,45 @@ const MODE_STATUS: Record<AiMode, string> = {
 function buildAiPlaceholder(mode: AiMode, question: string): string {
   const compact = escapeHtml(truncate(compactQuestion(question), MAX_PLACEHOLDER_QUESTION_LENGTH));
   return `${MODE_TITLE[mode]}\n<b>Q:</b> ${compact}\n\n${MODE_STATUS[mode]}`;
+}
+
+const TIKTOK_MODE_TITLE: Record<TikTokDiscoveryMode, string> = {
+  web: '🌐 <b>TikTok Web</b>',
+  ai: '🤖 <b>TikTok AI</b>',
+  scrap: '🧪 <b>TikTok Scrap</b>',
+};
+
+function buildTikTokPlaceholder(mode: TikTokDiscoveryMode, query: string): string {
+  const compact = escapeHtml(truncate(compactQuestion(query), MAX_PLACEHOLDER_QUESTION_LENGTH));
+  return `${TIKTOK_MODE_TITLE[mode]}\n<b>Search:</b> ${compact}\n\n⏳ Finding a TikTok video...`;
+}
+
+function createTikTokSearchSession(userId: number, query: string, mode: TikTokDiscoveryMode): string {
+  const id = randomUUID().replace(/-/g, '').slice(0, 16);
+  tikTokSearchSessions.set(id, {
+    query,
+    mode,
+    userId,
+    usedUrls: [],
+    createdAt: Date.now(),
+  });
+  return id;
+}
+
+function getTikTokSearchSession(id: string): TikTokSearchSession | undefined {
+  const session = tikTokSearchSessions.get(id);
+  if (!session) return undefined;
+  if (Date.now() - session.createdAt > TIKTOK_SEARCH_TTL_MS) {
+    tikTokSearchSessions.delete(id);
+    return undefined;
+  }
+  return session;
+}
+
+function buildTikTokNextReplyMarkup(sessionId: string): DownloadJob['inlineReplyMarkup'] {
+  return {
+    inline_keyboard: [[{ text: 'Next ▶', callback_data: `${TIKTOK_NEXT_PREFIX}${sessionId}` }]],
+  };
 }
 
 function injectInlineCitations(escapedText: string, linkUrls: string[]): string {
@@ -216,6 +276,144 @@ async function handleAiInlineResult(
   }
 }
 
+function queueInlineDownload(
+  userId: number,
+  url: string,
+  inlineMessageId?: string,
+  inlineReplyMarkup?: DownloadJob['inlineReplyMarkup']
+): void {
+  queueService.addJob({
+    id: randomUUID(),
+    url,
+    platform: detectPlatform(url),
+    userId,
+    chatId: userId,
+    messageId: 0,
+    status: JobStatus.QUEUED,
+    createdAt: new Date(),
+    ...(inlineMessageId ? { inlineMessageId } : {}),
+    ...(inlineReplyMarkup ? { inlineReplyMarkup } : {}),
+  });
+}
+
+async function handleTikTokDiscoveryInlineResult(
+  ctx: Context,
+  userId: number,
+  query: string,
+  mode: TikTokDiscoveryMode,
+  inlineMessageId?: string
+): Promise<void> {
+  if (!checkRateLimit(userId)) {
+    logger.warn(`Inline TikTok discovery rate limit exceeded for user ${userId}`);
+    await ctx.telegram.sendMessage(userId, getText(userId, 'rateLimitExceeded'));
+    return;
+  }
+
+  try {
+    const sessionId = createTikTokSearchSession(userId, query, mode);
+    const session = getTikTokSearchSession(sessionId);
+    const discoveredUrl = await findTikTokVideoUrl(query, mode, session?.usedUrls || []);
+    const normalizedUrl = normalizeUrl(discoveredUrl);
+
+    if (!validateUrl(normalizedUrl)) {
+      throw new Error('Discovered TikTok URL is unsupported');
+    }
+
+    if (session) {
+      session.usedUrls.push(normalizedUrl);
+    }
+
+    if (!config.mediaChatId && inlineMessageId) {
+      logger.warn('MEDIA_CHAT_ID not set — inline TikTok replace disabled, sending to PM');
+    }
+
+    recordRequest(userId);
+    queueInlineDownload(
+      userId,
+      normalizedUrl,
+      config.mediaChatId ? inlineMessageId : undefined,
+      config.mediaChatId ? buildTikTokNextReplyMarkup(sessionId) : undefined
+    );
+    logger.info(`Inline TikTok discovery queued for user ${userId}: ${normalizedUrl.substring(0, 80)}...`);
+  } catch (error: unknown) {
+    logger.error('Inline TikTok discovery failed', error instanceof Error ? error : undefined);
+    const message = 'No TikTok video found. Try different keywords.';
+
+    if (inlineMessageId) {
+      try {
+        await ctx.telegram.editMessageText(undefined, undefined, inlineMessageId, message);
+        return;
+      } catch (editError: unknown) {
+        logger.warn(`Failed to edit inline TikTok discovery error message: ${String(editError)}`);
+      }
+    }
+
+    await ctx.telegram.sendMessage(userId, message);
+  }
+}
+
+function callbackData(query: CallbackQuery | undefined): string {
+  if (!query || !('data' in query)) return '';
+  return query.data || '';
+}
+
+export async function handleCallbackQuery(ctx: Context): Promise<void> {
+  const query = 'callback_query' in ctx.update ? ctx.update.callback_query : undefined;
+  const data = callbackData(query);
+  const userId = ctx.from?.id;
+
+  if (!data.startsWith(TIKTOK_NEXT_PREFIX) || !userId) return;
+
+  const sessionId = data.slice(TIKTOK_NEXT_PREFIX.length);
+  const session = getTikTokSearchSession(sessionId);
+  const inlineMessageId = query && 'inline_message_id' in query ? query.inline_message_id : undefined;
+
+  try {
+    await ctx.answerCbQuery('Finding next video...');
+  } catch {
+    // Telegram may reject late callback acknowledgements; the download can still continue.
+  }
+
+  if (!session || session.userId !== userId) {
+    await ctx.telegram.sendMessage(userId, 'Search expired. Try inline search again.');
+    return;
+  }
+
+  if (!inlineMessageId) {
+    await ctx.telegram.sendMessage(userId, 'Next only works on inline videos.');
+    return;
+  }
+
+  if (!checkRateLimit(userId)) {
+    logger.warn(`Inline TikTok next rate limit exceeded for user ${userId}`);
+    await ctx.telegram.sendMessage(userId, getText(userId, 'rateLimitExceeded'));
+    return;
+  }
+
+  try {
+    await ctx.telegram.editMessageCaption(undefined, undefined, inlineMessageId, '⏳ Finding next TikTok video...');
+  } catch (error) {
+    logger.warn(`Failed to update TikTok next caption: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    const discoveredUrl = await findTikTokVideoUrl(session.query, session.mode, session.usedUrls);
+    const normalizedUrl = normalizeUrl(discoveredUrl);
+
+    if (!validateUrl(normalizedUrl)) {
+      throw new Error('Discovered TikTok URL is unsupported');
+    }
+
+    session.usedUrls.push(normalizedUrl);
+    recordRequest(userId);
+    queueInlineDownload(userId, normalizedUrl, inlineMessageId, buildTikTokNextReplyMarkup(sessionId));
+    logger.info(`Inline TikTok next queued for user ${userId}: ${normalizedUrl.substring(0, 80)}...`);
+  } catch (error) {
+    logger.error('Inline TikTok next failed', error instanceof Error ? error : undefined);
+    await ctx.telegram.sendMessage(userId, 'No more TikTok videos found. Try different keywords.');
+  }
+}
+
 export async function handleInlineQuery(ctx: Context): Promise<void> {
   const query = ctx.inlineQuery?.query?.trim();
   const userId = ctx.from?.id;
@@ -223,8 +421,53 @@ export async function handleInlineQuery(ctx: Context): Promise<void> {
   if (!query || !userId) return;
 
   const results: any[] = [];
+  const tikTokFindQuery = extractTikTokFindQuery(query);
+  if (tikTokFindQuery) {
+    results.push(
+      {
+        type: 'article',
+        id: INLINE_RESULT_ID_TIKTOK_WEB,
+        title: '🌐 TikTok Web',
+        description: 'Find one TikTok video with web search',
+        input_message_content: {
+          message_text: buildTikTokPlaceholder('web', tikTokFindQuery),
+          parse_mode: 'HTML',
+        },
+        reply_markup: {
+          inline_keyboard: [[{ text: '🌐 Finding...', callback_data: randomUUID() }]],
+        },
+      },
+      {
+        type: 'article',
+        id: INLINE_RESULT_ID_TIKTOK_AI,
+        title: '🤖 TikTok AI',
+        description: 'Rewrite the query, then find one TikTok video',
+        input_message_content: {
+          message_text: buildTikTokPlaceholder('ai', tikTokFindQuery),
+          parse_mode: 'HTML',
+        },
+        reply_markup: {
+          inline_keyboard: [[{ text: '🤖 Finding...', callback_data: randomUUID() }]],
+        },
+      },
+      {
+        type: 'article',
+        id: INLINE_RESULT_ID_TIKTOK_SCRAP,
+        title: '🧪 TikTok Scrap',
+        description: 'Try direct TikTok search, with web fallback',
+        input_message_content: {
+          message_text: buildTikTokPlaceholder('scrap', tikTokFindQuery),
+          parse_mode: 'HTML',
+        },
+        reply_markup: {
+          inline_keyboard: [[{ text: '🧪 Finding...', callback_data: randomUUID() }]],
+        },
+      }
+    );
+  }
+
   const aiQuestion = parseAiQuestion(query);
-  if (aiQuestion) {
+  if (aiQuestion && !tikTokFindQuery) {
     results.push(
       {
         type: 'article',
@@ -314,6 +557,20 @@ export async function handleChosenInlineResult(ctx: Context): Promise<void> {
   if (!chosen || !userId) return;
 
   const query = chosen.query?.trim() || '';
+  const tikTokFindQuery = extractTikTokFindQuery(query);
+  if (resultId === INLINE_RESULT_ID_TIKTOK_WEB && tikTokFindQuery) {
+    await handleTikTokDiscoveryInlineResult(ctx, userId, tikTokFindQuery, 'web', inlineMessageId);
+    return;
+  }
+  if (resultId === INLINE_RESULT_ID_TIKTOK_AI && tikTokFindQuery) {
+    await handleTikTokDiscoveryInlineResult(ctx, userId, tikTokFindQuery, 'ai', inlineMessageId);
+    return;
+  }
+  if (resultId === INLINE_RESULT_ID_TIKTOK_SCRAP && tikTokFindQuery) {
+    await handleTikTokDiscoveryInlineResult(ctx, userId, tikTokFindQuery, 'scrap', inlineMessageId);
+    return;
+  }
+
   const aiQuestion = parseAiQuestion(query);
   if (resultId === INLINE_RESULT_ID_ASK_GEMINI && aiQuestion) {
     await handleAiInlineResult(ctx, userId, aiQuestion, 'gemini', inlineMessageId);

@@ -39,6 +39,10 @@ export interface DownloadJob {
   createdAt: Date;
   /** For inline mode: replace placeholder in chat with downloaded video */
   inlineMessageId?: string;
+  /** Optional inline keyboard to attach when replacing inline media. */
+  inlineReplyMarkup?: {
+    inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+  };
 }
 
 export interface VideoInfo {

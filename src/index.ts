@@ -4,7 +4,7 @@ import { config } from './config/index.js';
 import { handleStart } from './handlers/startHandler.js';
 import { handleMessage, setupJobProcessor } from './handlers/messageHandler.js';
 import { handleGroupMessage } from './handlers/groupHandler.js';
-import { handleInlineQuery, handleChosenInlineResult } from './handlers/inlineHandler.js';
+import { handleInlineQuery, handleChosenInlineResult, handleCallbackQuery } from './handlers/inlineHandler.js';
 import { scheduleCleanup } from './services/fileService.js';
 import { logger } from './utils/logger.js';
 import http from 'http';
@@ -112,6 +112,7 @@ async function main() {
   bot.command('start', handleStart);
   bot.on('inline_query', handleInlineQuery);
   bot.on('chosen_inline_result', handleChosenInlineResult);
+  bot.on('callback_query', handleCallbackQuery);
 
   // Message handlers (rate limiting applied per download, not per message)
   bot.on([message('text'), message('caption')], async (ctx) => {

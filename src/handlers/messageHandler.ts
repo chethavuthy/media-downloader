@@ -22,12 +22,11 @@ function escapeHtml(s: string): string {
 }
 
 function buildCaption(_platform: Platform, info?: { title?: string; description?: string }): string | undefined {
-  const desc = (info?.description || info?.title || '').trim();
+  const desc = (info?.description || info?.title || '').replace(/\s+/g, ' ').trim();
   if (!desc) return undefined;
 
   const escaped = escapeHtml(desc);
-  const lineCount = escaped.split('\n').filter(Boolean).length;
-  const tag = lineCount > 3 ? 'blockquote expandable' : 'blockquote';
+  const tag = 'blockquote';
   const closeTag = 'blockquote';
 
   const descBlock = `<${tag}>${escaped}</${closeTag}>`;
@@ -424,7 +423,7 @@ export function setupJobProcessor(telegram: Telegram): void {
               height: videoHeight,
               duration: videoDuration,
               ...(caption ? { caption, parse_mode: 'HTML' as const } : {}),
-            });
+            }, job.inlineReplyMarkup ? { reply_markup: job.inlineReplyMarkup } : undefined);
           }
         } catch (err) {
           logger.error(`Inline replace failed: ${err}`);
