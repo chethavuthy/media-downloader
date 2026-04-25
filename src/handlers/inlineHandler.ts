@@ -24,8 +24,7 @@ const INLINE_RESULT_ID_ASK_TAVILY = 'ask_tavily';
 const INLINE_RESULT_ID_TIKTOK_WEB = 'tiktok_web';
 const INLINE_RESULT_ID_TIKTOK_AI = 'tiktok_ai';
 const INLINE_RESULT_ID_TIKTOK_SCRAP = 'tiktok_scrap';
-const TIKTOK_REPLACE_PREFIX = 'tt_replace:';
-const TIKTOK_SEND_PREFIX = 'tt_send:';
+const TIKTOK_NEXT_PREFIX = 'tt_next:';
 const TIKTOK_SEARCH_TTL_MS = 30 * 60 * 1000;
 const MAX_PLACEHOLDER_QUESTION_LENGTH = 220;
 const MAX_ANSWER_LENGTH = 3800;
@@ -171,12 +170,9 @@ function getTikTokSearchSession(id: string): TikTokSearchSession | undefined {
   return session;
 }
 
-export function buildTikTokNextReplyMarkup(sessionId: string): DownloadJob['inlineReplyMarkup'] {
+function buildTikTokNextReplyMarkup(sessionId: string): DownloadJob['inlineReplyMarkup'] {
   return {
-    inline_keyboard: [[
-      { text: 'Replace ↻', callback_data: `${TIKTOK_REPLACE_PREFIX}${sessionId}` },
-      { text: 'Send Next ▶', callback_data: `${TIKTOK_SEND_PREFIX}${sessionId}` },
-    ]],
+    inline_keyboard: [[{ text: 'Next ▶', callback_data: `${TIKTOK_NEXT_PREFIX}${sessionId}` }]],
   };
 }
 
@@ -366,16 +362,14 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
   const data = callbackData(query);
   const userId = ctx.from?.id;
 
-  const shouldReplace = data.startsWith(TIKTOK_REPLACE_PREFIX);
-  const shouldSend = data.startsWith(TIKTOK_SEND_PREFIX);
-  if ((!shouldReplace && !shouldSend) || !userId) return;
+  if (!data.startsWith(TIKTOK_NEXT_PREFIX) || !userId) return;
 
-  const sessionId = data.slice((shouldReplace ? TIKTOK_REPLACE_PREFIX : TIKTOK_SEND_PREFIX).length);
+  const sessionId = data.slice(TIKTOK_NEXT_PREFIX.length);
   const session = getTikTokSearchSession(sessionId);
   const inlineMessageId = query && 'inline_message_id' in query ? query.inline_message_id : undefined;
 
   try {
-    await ctx.answerCbQuery(shouldReplace ? 'Replacing video...' : 'Sending next video...');
+    await ctx.answerCbQuery('Finding next video...');
   } catch {
     // Telegram may reject late callback acknowledgements; the download can still continue.
   }
@@ -385,7 +379,7 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
     return;
   }
 
-  if (shouldReplace && !inlineMessageId) {
+  if (!inlineMessageId) {
     await ctx.telegram.sendMessage(userId, 'Next only works on inline videos.');
     return;
   }
@@ -396,12 +390,10 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
     return;
   }
 
-  if (shouldReplace && inlineMessageId) {
-    try {
-      await ctx.telegram.editMessageCaption(undefined, undefined, inlineMessageId, '⏳ Finding replacement TikTok video...');
-    } catch (error) {
-      logger.warn(`Failed to update TikTok replacement caption: ${error instanceof Error ? error.message : String(error)}`);
-    }
+  try {
+    await ctx.telegram.editMessageCaption(undefined, undefined, inlineMessageId, '⏳ Finding next TikTok video...');
+  } catch (error) {
+    logger.warn(`Failed to update TikTok next caption: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   try {
@@ -414,15 +406,10 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
 
     session.usedUrls.push(normalizedUrl);
     recordRequest(userId);
-    queueInlineDownload(
-      userId,
-      normalizedUrl,
-      shouldReplace ? inlineMessageId : undefined,
-      shouldReplace ? buildTikTokNextReplyMarkup(sessionId) : undefined
-    );
-    logger.info(`Inline TikTok ${shouldReplace ? 'replace' : 'send next'} queued for user ${userId}: ${normalizedUrl.substring(0, 80)}...`);
+    queueInlineDownload(userId, normalizedUrl, inlineMessageId, buildTikTokNextReplyMarkup(sessionId));
+    logger.info(`Inline TikTok next queued for user ${userId}: ${normalizedUrl.substring(0, 80)}...`);
   } catch (error) {
-    logger.error(`Inline TikTok ${shouldReplace ? 'replace' : 'send next'} failed`, error instanceof Error ? error : undefined);
+    logger.error('Inline TikTok next failed', error instanceof Error ? error : undefined);
     await ctx.telegram.sendMessage(userId, 'No more TikTok videos found. Try different keywords.');
   }
 }
