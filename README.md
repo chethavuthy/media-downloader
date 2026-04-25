@@ -17,6 +17,7 @@ A production-ready Telegram bot that downloads videos from multiple platforms wi
 - **Bilingual**: Full support for Khmer and English
 - **Private & Group Chats**: Works seamlessly in both contexts
 - **Inline Mode**: Type `@bot [link]` in any chat — no need to add bot to group
+- **3 Inline Actions**: Video download, Ask AI (fallback chain), Ask Gemini (Gemini-only)
 - **Rate Limiting**: Prevents abuse with configurable limits
 - **Smart Queue System**: Handles multiple downloads concurrently
 - **Auto Cleanup**: Temporary files are automatically deleted
@@ -78,6 +79,18 @@ npm run dev
 npm run build
 ```
 
+### Fast VPS Deploy
+
+```bash
+# one-time setup for passwordless SSH
+npm run setup:vps:ssh
+
+# fast deploy (single command)
+npm run deploy:vps
+```
+
+Use `npm run deploy:vps:safe` to run local build + VPS build.
+
 ## 📖 Usage
 
 ### Private Chat
@@ -101,6 +114,18 @@ npm run build
 3. Video appears in the chat as "You via @YourBotUsername"
 4. Requires `MEDIA_CHAT_ID` (channel/group where bot uploads to get file_id)
 
+### Inline Ask AI
+
+1. In any chat, type `@YourBotUsername What is happening in Phnom Penh now?`
+2. Choose one inline action:
+   - `🤖 Ask AI` (fallback chain)
+   - `✨ Ask Gemini` (Gemini-only chain)
+   - `📥 Download ... video` (shown when a valid video URL is present)
+3. AI options use static descriptions in the picker; the selected placeholder shows `Q: <your question>` + `Thinking...`
+4. Placeholder is replaced with the final result
+5. Prefixes still supported for compatibility: `Ask AI`, `Ask Grok`, `Ask Gemini`
+6. Ask AI fallback order: `Gemini + Google Search` → `Gemini + Brave/Tavily web context` → `Gemini` → `Grok`
+
 ## ⚙️ Configuration
 
 Edit `.env` to customize bot behavior:
@@ -117,6 +142,19 @@ Edit `.env` to customize bot behavior:
 | `LOG_LEVEL` | info | Logging level (info/warn/error) |
 | `MEDIA_CHAT_ID` | - | For inline: chat where bot uploads to get file_id (required for "via @bot") |
 | `BOT_USERNAME` | - | For TikTok caption: "mention @BOT_USERNAME to download any video" |
+| `GEMINI_API_KEY` | - | Primary API key for Ask AI |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model used for Ask AI |
+| `GEMINI_API_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta` | Gemini API base URL |
+| `GEMINI_API_TIMEOUT_MS` | 30000 | Timeout for Gemini requests |
+| `BRAVE_API_KEY` | - | Web-search fallback key (used when Gemini grounding fails) |
+| `BRAVE_API_BASE_URL` | `https://api.search.brave.com/res/v1` | Brave Search API base URL |
+| `TAVILY_API_KEY` | - | Secondary web-search fallback key |
+| `TAVILY_API_BASE_URL` | `https://api.tavily.com` | Tavily API base URL |
+| `AI_MAX_SEARCH_RESULTS` | 6 | Max results used in fallback web context |
+| `GROK_API_KEY` | - | Optional final fallback provider key |
+| `GROK_API_BASE_URL` | `https://api.x.ai/v1` | Grok fallback API base URL |
+| `GROK_MODEL` | `grok-3-mini` | Grok fallback model |
+| `GROK_API_TIMEOUT_MS` | 30000 | Timeout for Grok fallback requests |
 
 ## 🏗️ Architecture
 
@@ -166,3 +204,8 @@ MIT
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Video downloader
 
 Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+
+## 📚 Additional Docs
+
+- Inline features guide: `docs/INLINE_FEATURE_GUIDE.md`
+- VPS deployment runbook: `docs/DEPLOYMENT_RUNBOOK.md`

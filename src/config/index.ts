@@ -23,6 +23,32 @@ interface Config {
   mediaChatId: string;
   /** Bot username for caption mention (e.g. TestClipSn1perBot) */
   botUsername: string;
+  /** xAI/OpenAI-compatible API key used for Ask Grok inline mode. */
+  grokApiKey: string;
+  /** Base URL for Grok-compatible chat completions API. */
+  grokApiBaseUrl: string;
+  /** Model id for Grok requests. */
+  grokModel: string;
+  /** Timeout for Grok API calls in milliseconds. */
+  grokApiTimeoutMs: number;
+  /** Gemini API key for Ask AI inline mode (primary provider). */
+  geminiApiKey: string;
+  /** Gemini model id for Ask AI requests. */
+  geminiModel: string;
+  /** Base URL for Gemini REST API. */
+  geminiApiBaseUrl: string;
+  /** Timeout for Gemini API calls in milliseconds. */
+  geminiApiTimeoutMs: number;
+  /** Brave Search API key used when Gemini grounding fails. */
+  braveApiKey: string;
+  /** Base URL for Brave Search API. */
+  braveApiBaseUrl: string;
+  /** Tavily API key used as secondary search fallback. */
+  tavilyApiKey: string;
+  /** Base URL for Tavily Search API. */
+  tavilyApiBaseUrl: string;
+  /** Max number of fallback web search results to include. */
+  aiMaxSearchResults: number;
 }
 
 function getEnvVar(key: string, defaultValue?: string): string {
@@ -76,4 +102,17 @@ export const config: Config = {
   logLevel: getEnvVar('LOG_LEVEL', 'info'),
   mediaChatId: getEnvVar('MEDIA_CHAT_ID', ''),
   botUsername: getEnvVar('BOT_USERNAME', ''),
+  grokApiKey: getEnvVar('GROK_API_KEY', ''),
+  grokApiBaseUrl: getEnvVar('GROK_API_BASE_URL', 'https://api.x.ai/v1'),
+  grokModel: getEnvVar('GROK_MODEL', 'grok-3-mini'),
+  grokApiTimeoutMs: getEnvNumber('GROK_API_TIMEOUT_MS', 30000),
+  geminiApiKey: getEnvVar('GEMINI_API_KEY', ''),
+  geminiModel: getEnvVar('GEMINI_MODEL', 'gemini-2.5-flash'),
+  geminiApiBaseUrl: getEnvVar('GEMINI_API_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'),
+  geminiApiTimeoutMs: getEnvNumber('GEMINI_API_TIMEOUT_MS', 30000),
+  braveApiKey: getEnvVar('BRAVE_API_KEY', ''),
+  braveApiBaseUrl: getEnvVar('BRAVE_API_BASE_URL', 'https://api.search.brave.com/res/v1'),
+  tavilyApiKey: getEnvVar('TAVILY_API_KEY', ''),
+  tavilyApiBaseUrl: getEnvVar('TAVILY_API_BASE_URL', 'https://api.tavily.com'),
+  aiMaxSearchResults: getEnvNumber('AI_MAX_SEARCH_RESULTS', 6),
 };

@@ -21,12 +21,21 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function buildTikTokCaption(info: { title?: string; description?: string }): string | undefined {
-  if (!config.botUsername) return undefined;
-  const base = (info.description || info.title || '').trim();
-  const mention = `<i>mention @${config.botUsername} to download any videos</i>`;
-  const full = base ? `<blockquote>${escapeHtml(base)}</blockquote>\n\n${mention}` : mention;
-  return full.slice(0, CAPTION_MAX) || undefined;
+function buildCaption(_platform: Platform, info?: { title?: string; description?: string }): string | undefined {
+  const desc = (info?.description || info?.title || '').trim();
+  if (!desc) return undefined;
+
+  const escaped = escapeHtml(desc);
+  const lineCount = escaped.split('\n').filter(Boolean).length;
+  const tag = lineCount > 3 ? 'blockquote expandable' : 'blockquote';
+  const closeTag = 'blockquote';
+
+  const descBlock = `<${tag}>${escaped}</${closeTag}>`;
+  if (descBlock.length <= CAPTION_MAX) return descBlock;
+
+  const overhead = CAPTION_MAX - `<${tag}></${closeTag}>`.length - 1;
+  if (overhead < 20) return undefined;
+  return `<blockquote expandable>${escaped.slice(0, overhead)}…</blockquote>`;
 }
 
 export async function handleMessage(ctx: Context<Update.MessageUpdate>): Promise<void> {
@@ -134,13 +143,12 @@ export function setupJobProcessor(telegram: Telegram): void {
         logger.info(`Detected album/carousel: ${job.url}`);
 
         let albumCaption: string | undefined;
-        if (job.platform === Platform.TIKTOK) {
-          try {
-            const info = await getVideoInfo(job.url);
-            albumCaption = buildTikTokCaption(info);
-          } catch (e) {
-            logger.warn('Could not get TikTok caption for album');
-          }
+        try {
+          const info = await getVideoInfo(job.url);
+          albumCaption = buildCaption(job.platform, info);
+        } catch (e) {
+          albumCaption = buildCaption(job.platform);
+          logger.warn('Could not get video info for album caption');
         }
 
         // Download all media from album
@@ -250,8 +258,9 @@ export function setupJobProcessor(telegram: Telegram): void {
           let fallbackCaption: string | undefined;
           try {
             const info = await getVideoInfo(job.url);
-            fallbackCaption = buildTikTokCaption(info);
+            fallbackCaption = buildCaption(job.platform, info);
           } catch (e) {
+            fallbackCaption = buildCaption(job.platform);
             logger.warn('Could not get TikTok caption for fallback');
           }
           const albumDir = createTempPath(job.id + '-album').replace('.%(ext)s', '');
@@ -387,13 +396,12 @@ export function setupJobProcessor(telegram: Telegram): void {
       }
 
       let caption: string | undefined;
-      if (job.platform === Platform.TIKTOK) {
-        try {
-          const info = await getVideoInfo(job.url);
-          caption = buildTikTokCaption(info);
-        } catch (e) {
-          logger.warn('Could not get TikTok caption');
-        }
+      try {
+        const info = await getVideoInfo(job.url);
+        caption = buildCaption(job.platform, info);
+      } catch (e) {
+        caption = buildCaption(job.platform);
+        logger.warn('Could not get video caption');
       }
 
       // Inline: upload to media chat, get file_id, replace placeholder
@@ -455,8 +463,10 @@ export function setupJobProcessor(telegram: Telegram): void {
           const isSslError = uploadError.message?.includes('SSL') || uploadError.message?.includes('ECONNRESET');
           if (retries >= maxRetries) {
             logger.warn(`Upload failed after ${maxRetries} attempts, sending as document`);
+            const docCaption = `⚠️ <i>Sent as file due to upload issues</i>`;
             await telegram.sendDocument(job.chatId, { source: actualPath }, {
-              caption: `⚠️ Sent as file due to upload issues`,
+              caption: docCaption,
+              parse_mode: 'HTML' as const,
               ...(job.messageId ? { reply_parameters: { message_id: job.messageId } } : {}),
             });
             uploadSuccess = true;

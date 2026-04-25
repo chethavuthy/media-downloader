@@ -113,6 +113,29 @@ Expected paths:
 
 ## 6) Deploy App to VPS
 
+### Fast deploy (recommended)
+
+Use the new helper scripts from project root:
+
+```bash
+# One-time: configure passwordless SSH
+npm run setup:vps:ssh
+
+# Fast deploy (build on VPS only, sync + restart)
+npm run deploy:vps
+
+# Safer deploy (local build + VPS build)
+npm run deploy:vps:safe
+```
+
+Optional environment overrides for deploy script:
+- `VPS_HOST`
+- `VPS_USER`
+- `VPS_PORT`
+- `VPS_APP_DIR`
+- `SERVICE_NAME`
+- `SSH_KEY_PATH`
+
 ### Sync project from local machine
 
 ```bash
@@ -154,6 +177,8 @@ EnvironmentFile=/opt/media-downloader/.env
 ExecStart=/usr/bin/node /opt/media-downloader/dist/index.js
 Restart=always
 RestartSec=5
+TimeoutStopSec=15
+KillMode=process
 StandardOutput=journal
 StandardError=journal
 
@@ -184,6 +209,27 @@ Restart after env/code changes:
 ```bash
 cd /opt/media-downloader
 npm run build
+systemctl restart media-downloader.service
+```
+
+To reduce restart wait during deploy (if stop takes too long), apply a systemd override:
+
+```bash
+systemctl edit media-downloader.service
+```
+
+Add:
+
+```ini
+[Service]
+TimeoutStopSec=15
+KillMode=process
+```
+
+Then reload and restart:
+
+```bash
+systemctl daemon-reload
 systemctl restart media-downloader.service
 ```
 

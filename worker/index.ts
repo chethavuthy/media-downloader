@@ -19,6 +19,19 @@ type Env = {
   RATE_LIMIT_WINDOW_MINUTES: string;
   YT_DLP_PATH: string;
   AUTO_CLEANUP_MINUTES: string;
+  GROK_API_KEY?: string;
+  GROK_API_BASE_URL?: string;
+  GROK_MODEL?: string;
+  GROK_API_TIMEOUT_MS?: string;
+  GEMINI_API_KEY?: string;
+  GEMINI_MODEL?: string;
+  GEMINI_API_BASE_URL?: string;
+  GEMINI_API_TIMEOUT_MS?: string;
+  BRAVE_API_KEY?: string;
+  BRAVE_API_BASE_URL?: string;
+  TAVILY_API_KEY?: string;
+  TAVILY_API_BASE_URL?: string;
+  AI_MAX_SEARCH_RESULTS?: string;
 };
 
 const CONTAINER_ID = 'clipsniper-bot';
@@ -49,6 +62,19 @@ export class BotContainer extends Container<Env> {
       RATE_LIMIT_WINDOW_MINUTES: env.RATE_LIMIT_WINDOW_MINUTES,
       YT_DLP_PATH: env.YT_DLP_PATH,
       AUTO_CLEANUP_MINUTES: env.AUTO_CLEANUP_MINUTES,
+      GROK_API_KEY: env.GROK_API_KEY || '',
+      GROK_API_BASE_URL: env.GROK_API_BASE_URL || 'https://api.x.ai/v1',
+      GROK_MODEL: env.GROK_MODEL || 'grok-3-mini',
+      GROK_API_TIMEOUT_MS: env.GROK_API_TIMEOUT_MS || '30000',
+      GEMINI_API_KEY: env.GEMINI_API_KEY || '',
+      GEMINI_MODEL: env.GEMINI_MODEL || 'gemini-2.5-flash',
+      GEMINI_API_BASE_URL: env.GEMINI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta',
+      GEMINI_API_TIMEOUT_MS: env.GEMINI_API_TIMEOUT_MS || '30000',
+      BRAVE_API_KEY: env.BRAVE_API_KEY || '',
+      BRAVE_API_BASE_URL: env.BRAVE_API_BASE_URL || 'https://api.search.brave.com/res/v1',
+      TAVILY_API_KEY: env.TAVILY_API_KEY || '',
+      TAVILY_API_BASE_URL: env.TAVILY_API_BASE_URL || 'https://api.tavily.com',
+      AI_MAX_SEARCH_RESULTS: env.AI_MAX_SEARCH_RESULTS || '6',
     };
   }
 }

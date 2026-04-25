@@ -10,16 +10,18 @@ import { logger } from './utils/logger.js';
 import http from 'http';
 import dns from 'dns';
 
-function startHealthServer(port: number) {
-  http.createServer((_req, res) => {
+function startHealthServer(port: number): http.Server {
+  const server = http.createServer((_req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.write('Bot is running!');
     res.end();
-  }).listen(port);
+  });
+  server.listen(port);
   logger.info(`Health check server listening on port ${port}`);
+  return server;
 }
 
-async function startWebhookServer(bot: Telegraf, port: number) {
+async function startWebhookServer(bot: Telegraf, port: number): Promise<http.Server> {
   const secretToken = config.telegramWebhookSecretToken || undefined;
 
   await bot.telegram.setWebhook(
@@ -30,7 +32,7 @@ async function startWebhookServer(bot: Telegraf, port: number) {
 
   const webhookHandler = bot.webhookCallback(config.telegramWebhookPath, { secretToken });
 
-  http.createServer((req, res) => {
+  const server = http.createServer((req, res) => {
     const method = req.method || 'GET';
     const path = (req.url || '/').split('?')[0] || '/';
 
@@ -53,9 +55,26 @@ async function startWebhookServer(bot: Telegraf, port: number) {
 
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: 'Not found' }));
-  }).listen(port);
+  });
+
+  server.listen(port);
 
   logger.info(`Webhook server listening on port ${port} path ${config.telegramWebhookPath}`);
+  return server;
+}
+
+function closeServer(server: http.Server | null, name: string): Promise<void> {
+  if (!server) return Promise.resolve();
+  return new Promise((resolve) => {
+    server.close((err) => {
+      if (err) {
+        logger.warn(`Error while closing ${name}: ${err.message}`);
+      } else {
+        logger.info(`${name} closed`);
+      }
+      resolve();
+    });
+  });
 }
 
 async function main() {
@@ -76,6 +95,9 @@ async function main() {
   });
 
   const port = parseInt(process.env.PORT || '7860', 10);
+  let healthServer: http.Server | null = null;
+  let webhookServer: http.Server | null = null;
+  let shuttingDown = false;
 
   // Initialize bot
   const bot = new Telegraf(config.telegramBotToken);
@@ -112,18 +134,42 @@ async function main() {
   });
 
   // Graceful shutdown
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    logger.info(`${signal} received, stopping bot...`);
+    const forceExitTimer = setTimeout(() => {
+      logger.warn('Forced shutdown after timeout');
+      process.exit(0);
+    }, 8000);
+    forceExitTimer.unref();
+
+    try {
+      bot.stop(signal);
+    } catch (error) {
+      logger.warn(`bot.stop failed during ${signal}`);
+    }
+
+    await Promise.all([
+      closeServer(healthServer, 'Health server'),
+      closeServer(webhookServer, 'Webhook server'),
+    ]);
+
+    clearTimeout(forceExitTimer);
+    process.exit(0);
+  };
+
   process.once('SIGINT', () => {
-    logger.info('SIGINT received, stopping bot...');
-    bot.stop('SIGINT');
+    void shutdown('SIGINT');
   });
 
   process.once('SIGTERM', () => {
-    logger.info('SIGTERM received, stopping bot...');
-    bot.stop('SIGTERM');
+    void shutdown('SIGTERM');
   });
 
   if (config.telegramUseWebhook) {
-    await startWebhookServer(bot, port);
+    webhookServer = await startWebhookServer(bot, port);
     logger.info('Bot is running successfully in webhook mode!');
     return;
   }
@@ -137,7 +183,7 @@ async function main() {
     logger.warn('Could not remove existing webhook before polling startup');
   }
 
-  startHealthServer(port);
+  healthServer = startHealthServer(port);
 
   // Launch bot with retry logic for network issues
   const maxRetries = 10;
