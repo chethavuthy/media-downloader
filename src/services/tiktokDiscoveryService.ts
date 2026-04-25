@@ -21,9 +21,15 @@ interface TavilySearchResponse {
   results?: SearchResultRow[];
 }
 
+interface TikTokCandidate {
+  url: string;
+  text: string;
+}
+
 const FIND_TIKTOK_PREFIX = /^find\s+(?:me\s+)?(?:a\s+|some\s+)?(?:tiktok|tik\s?tok)\b[:\-]?\s*/i;
 const TIKTOK_VIDEO_PATH = /^\/@[^/]+\/video\/\d+/i;
 const TIKTOK_URL_PATTERN = /https?:\/\/(?:www\.|m\.|vm\.|vt\.)?tiktok\.com\/[^\s"'<>\\)]+/gi;
+const CAMBODIA_TERMS = ['cambodia', 'khmer', 'phnom penh', 'ភ្នំពេញ', 'ខ្មែរ', 'រាំ'];
 
 function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, '');
@@ -52,7 +58,10 @@ export function extractTikTokFindQuery(query: string): string | null {
 
 export function buildTikTokWebSearchQuery(query: string): string {
   const search = cleanQuery(query);
-  return `site:tiktok.com ${search}`.trim();
+  const lower = search.toLowerCase();
+  const hasCambodiaHint = CAMBODIA_TERMS.some((term) => lower.includes(term)) || /[\u1780-\u17FF]/.test(search);
+  const regionBias = hasCambodiaHint ? 'Cambodia Khmer ខ្មែរ' : 'Cambodia Khmer ខ្មែរ';
+  return `site:tiktok.com ${search} ${regionBias}`.replace(/\s+/g, ' ').trim();
 }
 
 function normalizeTikTokCandidateUrl(raw: string): string | null {
@@ -86,6 +95,31 @@ export function selectNextTikTokUrl(urls: string[], excludedUrls: string[]): str
   return null;
 }
 
+function scoreTikTokCandidate(candidate: TikTokCandidate): number {
+  const text = `${candidate.url} ${candidate.text}`.toLowerCase();
+  let score = 0;
+
+  if (text.includes('khmer')) score += 8;
+  if (text.includes('cambodia')) score += 8;
+  if (text.includes('phnom penh')) score += 5;
+  if (/[\u1780-\u17FF]/.test(candidate.text)) score += 10;
+  if (text.includes('dance') || text.includes('dancing')) score += 2;
+  if (text.includes('usa') || text.includes('united states')) score -= 5;
+  if (text.includes('america') || text.includes('american')) score -= 4;
+
+  return score;
+}
+
+export function rankTikTokCandidates(candidates: TikTokCandidate[]): string[] {
+  return candidates
+    .map((candidate, index) => ({ candidate, index, score: scoreTikTokCandidate(candidate) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .flatMap(({ candidate }) => {
+      const urls = [candidate.url, ...extractTikTokUrls(candidate.text)];
+      return urls;
+    });
+}
+
 function extractTikTokUrls(text: string): string[] {
   return unique(text.match(TIKTOK_URL_PATTERN) || []);
 }
@@ -111,7 +145,7 @@ async function rewriteTikTokQueryWithAi(query: string): Promise<string> {
   }
 }
 
-async function searchBrave(query: string): Promise<string[]> {
+async function searchBrave(query: string): Promise<TikTokCandidate[]> {
   if (!config.braveApiKey) return [];
 
   const controller = new AbortController();
@@ -119,6 +153,9 @@ async function searchBrave(query: string): Promise<string[]> {
   const url = new URL(`${normalizeBaseUrl(config.braveApiBaseUrl)}/web/search`);
   url.searchParams.set('q', buildTikTokWebSearchQuery(query));
   url.searchParams.set('count', String(Math.max(3, config.aiMaxSearchResults)));
+  url.searchParams.set('country', 'KH');
+  url.searchParams.set('search_lang', 'en');
+  url.searchParams.set('safesearch', 'moderate');
 
   try {
     const response = await fetch(url.toString(), {
@@ -132,10 +169,10 @@ async function searchBrave(query: string): Promise<string[]> {
 
     if (!response.ok) return [];
     const payload = (await response.json()) as BraveSearchResponse;
-    return (payload.web?.results || []).flatMap((row) => [
-      row.url || '',
-      ...extractTikTokUrls(`${row.title || ''} ${row.description || ''}`),
-    ]);
+    return (payload.web?.results || []).map((row) => ({
+      url: row.url || '',
+      text: `${row.title || ''} ${row.description || ''}`,
+    }));
   } catch (error) {
     logger.warn(`TikTok Brave search failed: ${error instanceof Error ? error.message : String(error)}`);
     return [];
@@ -144,7 +181,7 @@ async function searchBrave(query: string): Promise<string[]> {
   }
 }
 
-async function searchTavily(query: string): Promise<string[]> {
+async function searchTavily(query: string): Promise<TikTokCandidate[]> {
   if (!config.tavilyApiKey) return [];
 
   const controller = new AbortController();
@@ -165,10 +202,10 @@ async function searchTavily(query: string): Promise<string[]> {
 
     if (!response.ok) return [];
     const payload = (await response.json()) as TavilySearchResponse;
-    return (payload.results || []).flatMap((row) => [
-      row.url || '',
-      ...extractTikTokUrls(`${row.title || ''} ${row.content || ''}`),
-    ]);
+    return (payload.results || []).map((row) => ({
+      url: row.url || '',
+      text: `${row.title || ''} ${row.content || ''}`,
+    }));
   } catch (error) {
     logger.warn(`TikTok Tavily search failed: ${error instanceof Error ? error.message : String(error)}`);
     return [];
@@ -181,7 +218,7 @@ async function scrapeTikTokSearch(query: string): Promise<string[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   const url = new URL('https://www.tiktok.com/search/video');
-  url.searchParams.set('q', cleanQuery(query));
+  url.searchParams.set('q', `${cleanQuery(query)} Cambodia Khmer`);
 
   try {
     const response = await fetch(url.toString(), {
@@ -203,11 +240,11 @@ async function scrapeTikTokSearch(query: string): Promise<string[]> {
 }
 
 async function searchWeb(query: string): Promise<string[]> {
-  const [braveUrls, tavilyUrls] = await Promise.all([
+  const [braveCandidates, tavilyCandidates] = await Promise.all([
     searchBrave(query),
     searchTavily(query),
   ]);
-  return unique([...braveUrls, ...tavilyUrls]);
+  return unique(rankTikTokCandidates([...braveCandidates, ...tavilyCandidates]));
 }
 
 export async function findTikTokVideoUrl(
